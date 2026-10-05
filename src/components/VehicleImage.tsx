@@ -10,7 +10,12 @@ interface VehicleImageProps {
 export const VehicleImage: React.FC<VehicleImageProps> = ({ src, alt, className = '' }) => {
   const [hasError, setHasError] = useState(false);
 
-  if (hasError || !src) {
+  const resolvedSrc =
+    src && src.startsWith('/src/assets/')
+      ? `${import.meta.env.BASE_URL.replace(/\/$/, '')}${src}`
+      : src;
+
+  if (hasError || !resolvedSrc) {
     return (
       <div
         className={`flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-300 p-6 ${className}`}
@@ -25,7 +30,7 @@ export const VehicleImage: React.FC<VehicleImageProps> = ({ src, alt, className 
 
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       referrerPolicy="no-referrer"
       onError={() => setHasError(true)}

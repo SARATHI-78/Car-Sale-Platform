@@ -27,14 +27,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "npm"
 
       - name: Configure GitHub Pages
         id: pages
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm install
 
       - name: TypeScript & Firestore Security Rules Validation
         run: |
