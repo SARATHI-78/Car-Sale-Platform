@@ -1,0 +1,483 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account and RBAC role profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Public display name."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["buyer", "seller", "admin"],
+          "description": "Role-based access tier."
+        },
+        "verifiedSeller": {
+          "type": "boolean",
+          "description": "Whether the seller identity has been verified."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last profile update timestamp."
+        }
+      },
+      "required": ["uid", "displayName", "role", "verifiedSeller", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator lookup document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Admin UID."
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when admin privilege was granted."
+        }
+      },
+      "required": ["uid", "grantedAt"]
+    },
+    "CarListing": {
+      "title": "CarListing",
+      "description": "Vehicle listing on the Veloce Reserve marketplace.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "description": "Full headline title of the vehicle."
+        },
+        "make": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 50,
+          "description": "Manufacturer make."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Vehicle model designation."
+        },
+        "year": {
+          "type": "integer",
+          "description": "Model year (1950-2027)."
+        },
+        "price": {
+          "type": "number",
+          "description": "Listing price in USD."
+        },
+        "mileage": {
+          "type": "integer",
+          "description": "Odometer mileage in miles."
+        },
+        "bodyStyle": {
+          "type": "string",
+          "enum": ["Coupe", "Sedan", "SUV", "Wagon", "Convertible"],
+          "description": "Chassis body style."
+        },
+        "fuelType": {
+          "type": "string",
+          "enum": ["Electric", "Hybrid", "Gasoline"],
+          "description": "Powertrain fuel type."
+        },
+        "transmission": {
+          "type": "string",
+          "enum": ["Automatic", "Manual", "Dual-Clutch"],
+          "description": "Transmission specification."
+        },
+        "drivetrain": {
+          "type": "string",
+          "enum": ["AWD", "RWD", "FWD"],
+          "description": "Drivetrain layout."
+        },
+        "exteriorColor": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "description": "Factory exterior paint color."
+        },
+        "location": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "City and state location of the vehicle."
+        },
+        "vin": {
+          "type": "string",
+          "minLength": 11,
+          "maxLength": 17,
+          "pattern": "^[A-HJ-NPR-Z0-9]{11,17}$",
+          "description": "Vehicle Identification Number."
+        },
+        "imageUrl": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 500,
+          "description": "Primary studio photograph path or URL."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 2000,
+          "description": "Detailed provenance, factory options, and service history."
+        },
+        "sellerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the seller who owns the listing."
+        },
+        "sellerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the seller or dealership."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "reserved", "sold", "archived"],
+          "description": "Current lifecycle status of the vehicle."
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["public", "private"],
+          "description": "Whether the listing is publicly searchable."
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether the vehicle is highlighted in the curated collection."
+        },
+        "viewsCount": {
+          "type": "integer",
+          "description": "Total number of detail views."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Listing creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last listing modification timestamp."
+        }
+      },
+      "required": [
+        "title",
+        "make",
+        "model",
+        "year",
+        "price",
+        "mileage",
+        "bodyStyle",
+        "fuelType",
+        "transmission",
+        "drivetrain",
+        "exteriorColor",
+        "location",
+        "vin",
+        "imageUrl",
+        "description",
+        "sellerId",
+        "sellerName",
+        "status",
+        "visibility",
+        "featured",
+        "viewsCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OrderTransaction": {
+      "title": "OrderTransaction",
+      "description": "Escrow payment or reservation order for a vehicle listing.",
+      "type": "object",
+      "properties": {
+        "listingId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "ID of the purchased/reserved vehicle listing."
+        },
+        "listingTitle": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "description": "Snapshot title of the vehicle."
+        },
+        "buyerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the purchasing buyer."
+        },
+        "buyerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the buyer."
+        },
+        "sellerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the seller."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Transaction amount in USD."
+        },
+        "paymentType": {
+          "type": "string",
+          "enum": ["Reservation Deposit", "Full Escrow Wire", "Instant Card Checkout", "Pre-Approved Financing"],
+          "description": "Selected payment settlement method."
+        },
+        "paymentLast4": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 4,
+          "pattern": "^[0-9]{4}$",
+          "description": "Last 4 digits of payment instrument or wire reference."
+        },
+        "shippingAddress": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 250,
+          "description": "Enclosed carrier delivery destination or pickup facility."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["processing", "escrow_funded", "completed", "cancelled"],
+          "description": "Escrow settlement status."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Order creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Order update timestamp."
+        }
+      },
+      "required": [
+        "listingId",
+        "listingTitle",
+        "buyerId",
+        "buyerName",
+        "sellerId",
+        "amount",
+        "paymentType",
+        "paymentLast4",
+        "shippingAddress",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DirectMessage": {
+      "title": "DirectMessage",
+      "description": "Direct message between a buyer and seller regarding a specific vehicle listing.",
+      "type": "object",
+      "properties": {
+        "listingId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Referenced vehicle listing ID."
+        },
+        "listingTitle": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "description": "Vehicle title for thread context."
+        },
+        "senderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the message sender."
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the sender."
+        },
+        "recipientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the message recipient."
+        },
+        "recipientName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the recipient."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Message text content."
+        },
+        "read": {
+          "type": "boolean",
+          "description": "Whether the recipient has read the message."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the message was sent."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the message was last updated."
+        }
+      },
+      "required": [
+        "listingId",
+        "listingTitle",
+        "senderId",
+        "senderName",
+        "recipientId",
+        "recipientName",
+        "body",
+        "read",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "Real-time alert for order updates, messages, or listing changes.",
+      "type": "object",
+      "properties": {
+        "recipientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the user receiving the notification."
+        },
+        "senderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the actor triggering the notification."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["order_update", "new_message", "listing_status", "price_alert"],
+          "description": "Category of the real-time notification."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100,
+          "description": "Short notification headline."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 300,
+          "description": "Detailed notification message."
+        },
+        "relatedId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "ID of the related order, listing, or message."
+        },
+        "read": {
+          "type": "boolean",
+          "description": "Whether the user has dismissed/read the alert."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Notification creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Notification update timestamp."
+        }
+      },
+      "required": [
+        "recipientId",
+        "senderId",
+        "type",
+        "title",
+        "body",
+        "relatedId",
+        "read",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User account profiles and role assignments."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Trusted administrator UIDs."
+    },
+    "/listings/{listingId}": {
+      "schema": { "$ref": "#/entities/CarListing" },
+      "description": "Real-time vehicle listings on the marketplace."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/OrderTransaction" },
+      "description": "Escrow payment and vehicle reservation transactions."
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/DirectMessage" },
+      "description": "Direct buyer-seller communication messages."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/UserNotification" },
+      "description": "Real-time push and in-app notifications for users."
+    }
+  }
+}

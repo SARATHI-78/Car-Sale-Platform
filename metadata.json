@@ -1,0 +1,6 @@
+{
+  "name": "Veloce Reserve — Collector & Performance Vehicle Exchange",
+  "description": "Real-time automotive marketplace featuring verified collector listings, escrow payment processing, direct buyer-seller messaging, offline synchronization, and live sales analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

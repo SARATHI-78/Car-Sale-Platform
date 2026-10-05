@@ -1,0 +1,344 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email == 'sundarasarathi78@gmail.com' && request.auth.token.email_verified == true)
+      );
+    }
+
+    // 3. Validation Blueprints (Anti-Update-Gap)
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'verifiedSeller', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'role', 'verifiedSeller', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        data.role is string && data.role in ['buyer', 'seller', 'admin'] &&
+        data.verifiedSeller is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'grantedAt']) &&
+        data.keys().hasOnly(['uid', 'grantedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.grantedAt is timestamp;
+    }
+
+    function isValidCarListing(data) {
+      return data.keys().hasAll([
+          'title', 'make', 'model', 'year', 'price', 'mileage',
+          'bodyStyle', 'fuelType', 'transmission', 'drivetrain',
+          'exteriorColor', 'location', 'vin', 'imageUrl', 'description',
+          'sellerId', 'sellerName', 'status', 'visibility', 'featured',
+          'viewsCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'title', 'make', 'model', 'year', 'price', 'mileage',
+          'bodyStyle', 'fuelType', 'transmission', 'drivetrain',
+          'exteriorColor', 'location', 'vin', 'imageUrl', 'description',
+          'sellerId', 'sellerName', 'status', 'visibility', 'featured',
+          'viewsCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
+        data.make is string && data.make.size() >= 2 && data.make.size() <= 50 &&
+        data.model is string && data.model.size() >= 1 && data.model.size() <= 60 &&
+        data.year is int && data.year >= 1950 && data.year <= 2027 &&
+        data.price is number && data.price >= 1000 && data.price <= 10000000 &&
+        data.mileage is int && data.mileage >= 0 && data.mileage <= 500000 &&
+        data.bodyStyle is string && data.bodyStyle in ['Coupe', 'Sedan', 'SUV', 'Wagon', 'Convertible'] &&
+        data.fuelType is string && data.fuelType in ['Electric', 'Hybrid', 'Gasoline'] &&
+        data.transmission is string && data.transmission in ['Automatic', 'Manual', 'Dual-Clutch'] &&
+        data.drivetrain is string && data.drivetrain in ['AWD', 'RWD', 'FWD'] &&
+        data.exteriorColor is string && data.exteriorColor.size() >= 2 && data.exteriorColor.size() <= 40 &&
+        data.location is string && data.location.size() >= 2 && data.location.size() <= 80 &&
+        data.vin is string && data.vin.size() >= 11 && data.vin.size() <= 17 && data.vin.matches('^[A-HJ-NPR-Z0-9]{11,17}$') &&
+        data.imageUrl is string && data.imageUrl.size() >= 5 && data.imageUrl.size() <= 500 &&
+        data.description is string && data.description.size() >= 10 && data.description.size() <= 2000 &&
+        data.sellerId is string && data.sellerId.size() >= 1 && data.sellerId.size() <= 128 && data.sellerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.sellerName is string && data.sellerName.size() >= 1 && data.sellerName.size() <= 80 &&
+        data.status is string && data.status in ['active', 'reserved', 'sold', 'archived'] &&
+        data.visibility is string && data.visibility in ['public', 'private'] &&
+        data.featured is bool &&
+        data.viewsCount is int && data.viewsCount >= 0 && data.viewsCount <= 10000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrderTransaction(data) {
+      return data.keys().hasAll([
+          'listingId', 'listingTitle', 'buyerId', 'buyerName', 'sellerId',
+          'amount', 'paymentType', 'paymentLast4', 'shippingAddress',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'listingId', 'listingTitle', 'buyerId', 'buyerName', 'sellerId',
+          'amount', 'paymentType', 'paymentLast4', 'shippingAddress',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.listingId is string && data.listingId.size() >= 1 && data.listingId.size() <= 128 && data.listingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.listingTitle is string && data.listingTitle.size() >= 3 && data.listingTitle.size() <= 120 &&
+        data.buyerId is string && data.buyerId.size() >= 1 && data.buyerId.size() <= 128 && data.buyerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.buyerName is string && data.buyerName.size() >= 1 && data.buyerName.size() <= 80 &&
+        data.sellerId is string && data.sellerId.size() >= 1 && data.sellerId.size() <= 128 && data.sellerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.amount is number && data.amount >= 100 && data.amount <= 10000000 &&
+        data.paymentType is string && data.paymentType in ['Reservation Deposit', 'Full Escrow Wire', 'Instant Card Checkout', 'Pre-Approved Financing'] &&
+        data.paymentLast4 is string && data.paymentLast4.size() == 4 && data.paymentLast4.matches('^[0-9]{4}$') &&
+        data.shippingAddress is string && data.shippingAddress.size() >= 5 && data.shippingAddress.size() <= 250 &&
+        data.status is string && data.status in ['processing', 'escrow_funded', 'completed', 'cancelled'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDirectMessage(data) {
+      return data.keys().hasAll([
+          'listingId', 'listingTitle', 'senderId', 'senderName',
+          'recipientId', 'recipientName', 'body', 'read', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'listingId', 'listingTitle', 'senderId', 'senderName',
+          'recipientId', 'recipientName', 'body', 'read', 'createdAt', 'updatedAt'
+        ]) &&
+        data.listingId is string && data.listingId.size() >= 1 && data.listingId.size() <= 128 && data.listingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.listingTitle is string && data.listingTitle.size() >= 3 && data.listingTitle.size() <= 120 &&
+        data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 && data.senderId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+        data.recipientId is string && data.recipientId.size() >= 1 && data.recipientId.size() <= 128 && data.recipientId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 80 &&
+        data.body is string && data.body.size() >= 1 && data.body.size() <= 1000 &&
+        data.read is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserNotification(data) {
+      return data.keys().hasAll([
+          'recipientId', 'senderId', 'type', 'title', 'body',
+          'relatedId', 'read', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'recipientId', 'senderId', 'type', 'title', 'body',
+          'relatedId', 'read', 'createdAt', 'updatedAt'
+        ]) &&
+        data.recipientId is string && data.recipientId.size() >= 1 && data.recipientId.size() <= 128 && data.recipientId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 && data.senderId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.type is string && data.type in ['order_update', 'new_message', 'listing_status', 'price_alert'] &&
+        data.title is string && data.title.size() >= 2 && data.title.size() <= 100 &&
+        data.body is string && data.body.size() >= 2 && data.body.size() <= 300 &&
+        data.relatedId is string && data.relatedId.size() >= 1 && data.relatedId.size() <= 128 && data.relatedId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.read is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().uid == userId &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (incoming().role in ['buyer', 'seller'] && incoming().verifiedSeller == false) ||
+          isAdmin()
+        );
+      allow update: if isVerifiedUser() && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (request.auth.uid == userId &&
+            incoming().role in ['buyer', 'seller'] &&
+            incoming().verifiedSeller == existing().verifiedSeller &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'updatedAt'])) ||
+          isAdmin()
+        );
+      allow delete: if isVerifiedUser() && isValidId(userId) && isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() && isValidId(adminId) && isValidAdminRecord(incoming()) &&
+        incoming().uid == adminId &&
+        incoming().grantedAt == request.time &&
+        isAdmin();
+      allow update: if false;
+      allow delete: if isVerifiedUser() && isValidId(adminId) && isAdmin();
+    }
+
+    match /listings/{listingId} {
+      allow get: if isValidId(listingId) && (
+        existing().visibility == 'public' ||
+        (isSignedIn() && (existing().sellerId == request.auth.uid || isAdmin()))
+      );
+      allow list: if existing().visibility == 'public' ||
+        (isSignedIn() && (existing().sellerId == request.auth.uid || isAdmin()));
+      allow create: if isVerifiedUser() && isValidId(listingId) && isValidCarListing(incoming()) &&
+        incoming().sellerId == request.auth.uid &&
+        incoming().status == 'active' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isVerifiedUser() && isValidId(listingId) && isValidCarListing(incoming()) &&
+        incoming().sellerId == existing().sellerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (existing().status != 'sold' || isAdmin()) &&
+        (
+          // Action 1: Seller updates listing details or status
+          (request.auth.uid == existing().sellerId &&
+            incoming().featured == existing().featured &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'price', 'mileage', 'location', 'description',
+              'imageUrl', 'status', 'visibility', 'updatedAt'
+            ])) ||
+          // Action 2: Authenticated buyer reserves or purchases an active listing
+          (existing().status == 'active' &&
+            incoming().status in ['reserved', 'sold'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          // Action 3: View counter increment
+          (incoming().viewsCount == existing().viewsCount + 1 &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'updatedAt'])) ||
+          // Action 4: Admin override
+          isAdmin()
+        );
+      allow delete: if isVerifiedUser() && isValidId(listingId) && (
+        (existing().sellerId == request.auth.uid && existing().status != 'sold') ||
+        isAdmin()
+      );
+    }
+
+    match /orders/{orderId} {
+      allow get: if isSignedIn() && isValidId(orderId) && (
+        existing().buyerId == request.auth.uid ||
+        existing().sellerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().buyerId == request.auth.uid ||
+        existing().sellerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(orderId) && isValidOrderTransaction(incoming()) &&
+        incoming().buyerId == request.auth.uid &&
+        incoming().status in ['processing', 'escrow_funded'] &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/listings/$(incoming().listingId));
+      allow update: if isVerifiedUser() && isValidId(orderId) && isValidOrderTransaction(incoming()) &&
+        incoming().listingId == existing().listingId &&
+        incoming().buyerId == existing().buyerId &&
+        incoming().sellerId == existing().sellerId &&
+        incoming().amount == existing().amount &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        ((existing().status != 'completed' && existing().status != 'cancelled') || isAdmin()) &&
+        (
+          // Action 1: Buyer or Seller advances or cancels order state
+          ((request.auth.uid == existing().buyerId || request.auth.uid == existing().sellerId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          // Action 2: Admin override
+          isAdmin()
+        );
+      allow delete: if isVerifiedUser() && isValidId(orderId) && isAdmin();
+    }
+
+    match /messages/{messageId} {
+      allow get: if isSignedIn() && isValidId(messageId) && (
+        existing().senderId == request.auth.uid ||
+        existing().recipientId == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().senderId == request.auth.uid ||
+        existing().recipientId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(messageId) && isValidDirectMessage(incoming()) &&
+        incoming().senderId == request.auth.uid &&
+        incoming().senderId != incoming().recipientId &&
+        incoming().read == false &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/listings/$(incoming().listingId));
+      allow update: if isVerifiedUser() && isValidId(messageId) && isValidDirectMessage(incoming()) &&
+        incoming().listingId == existing().listingId &&
+        incoming().senderId == existing().senderId &&
+        incoming().recipientId == existing().recipientId &&
+        incoming().body == existing().body &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Recipient marks message as read
+          (request.auth.uid == existing().recipientId &&
+            existing().read == false &&
+            incoming().read == true &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])) ||
+          // Action 2: Admin override
+          isAdmin()
+        );
+      allow delete: if isVerifiedUser() && isValidId(messageId) && isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (
+        existing().recipientId == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().recipientId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isVerifiedUser() && isValidId(notificationId) && isValidUserNotification(incoming()) &&
+        incoming().senderId == request.auth.uid &&
+        incoming().read == false &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(notificationId) && isValidUserNotification(incoming()) &&
+        incoming().recipientId == existing().recipientId &&
+        incoming().senderId == existing().senderId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Recipient marks notification as read
+          (request.auth.uid == existing().recipientId &&
+            existing().read == false &&
+            incoming().read == true &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])) ||
+          // Action 2: Admin override
+          isAdmin()
+        );
+      allow delete: if isVerifiedUser() && isValidId(notificationId) && (
+        existing().recipientId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+  }
+}
