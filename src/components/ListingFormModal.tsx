@@ -1,17 +1,21 @@
 import React, { useState } from 'react';
 import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { X, Car } from 'lucide-react';
+import { X, Car, Sparkles } from 'lucide-react';
 import { db, OperationType, handleFirestoreError } from '../lib/firebase';
 import {
   BodyStyle,
   CarListing,
   DrivetrainType,
   FuelType,
+  INDIAN_REGIONS,
   ListingStatus,
   ListingVisibility,
   TransmissionType,
   UserProfile,
   VALIDATION_RULES,
+  formatINR,
+  formatLakhs,
+  normalizeToINR,
   sanitizeId,
 } from '../types/marketplace';
 
@@ -24,24 +28,24 @@ interface ListingFormModalProps {
 
 const STUDIO_IMAGE_PRESETS = [
   {
-    label: 'Porsche 911 GT3 Studio',
-    url: '/src/assets/images/hero_porsche_gt3_studio_1791181142895.jpg',
+    label: 'Mahindra XUV700 AX7L',
+    url: '/src/assets/images/india_hero_mahindra_xuv700_1791184461015.jpg',
   },
   {
-    label: 'Taycan Cross Turismo',
-    url: '/src/assets/images/car_taycan_cross_turismo_1791181159900.jpg',
+    label: 'Tata Harrier Dark AT',
+    url: '/src/assets/images/india_car_tata_harrier_ev_1791184474019.jpg',
   },
   {
-    label: 'Defender 110 V8',
-    url: '/src/assets/images/car_defender_110_v8_1791181171359.jpg',
+    label: 'Hyundai Creta Turbo',
+    url: '/src/assets/images/india_car_hyundai_creta_1791184485214.jpg',
   },
   {
-    label: 'Mercedes-AMG GT Coupe',
-    url: '/src/assets/images/car_amg_gt_coupe_1791181182873.jpg',
+    label: 'Maruti Grand Vitara Hybrid',
+    url: '/src/assets/images/india_car_maruti_grand_vitara_1791184497312.jpg',
   },
   {
-    label: 'Lucid Air Sapphire',
-    url: '/src/assets/images/car_lucid_air_sapphire_1791181195504.jpg',
+    label: 'Toyota Innova Hycross',
+    url: '/src/assets/images/india_car_toyota_hycross_1791184509008.jpg',
   },
 ];
 
@@ -51,31 +55,35 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
   onClose,
   onSaved,
 }) => {
-  const [title, setTitle] = useState(existingListing?.title || '2024 Porsche 911 Carrera GTS');
-  const [make, setMake] = useState(existingListing?.make || 'Porsche');
-  const [model, setModel] = useState(existingListing?.model || '911 Carrera GTS');
+  const [title, setTitle] = useState(
+    existingListing?.title || '2024 Tata Nexon EV Empowered+ Long Range'
+  );
+  const [make, setMake] = useState(existingListing?.make || 'Tata');
+  const [model, setModel] = useState(existingListing?.model || 'Nexon EV Empowered+ LR');
   const [year, setYear] = useState(existingListing?.year || 2024);
-  const [price, setPrice] = useState(existingListing?.price || 172500);
-  const [mileage, setMileage] = useState(existingListing?.mileage || 1850);
-  const [bodyStyle, setBodyStyle] = useState<BodyStyle>(existingListing?.bodyStyle || 'Coupe');
-  const [fuelType, setFuelType] = useState<FuelType>(existingListing?.fuelType || 'Gasoline');
+  const [price, setPrice] = useState(
+    existingListing ? normalizeToINR(existingListing.price) : 1490000
+  );
+  const [mileage, setMileage] = useState(existingListing?.mileage || 6400);
+  const [bodyStyle, setBodyStyle] = useState<BodyStyle>(existingListing?.bodyStyle || 'SUV');
+  const [fuelType, setFuelType] = useState<FuelType>(existingListing?.fuelType || 'Electric');
   const [transmission, setTransmission] = useState<TransmissionType>(
-    existingListing?.transmission || 'Dual-Clutch'
+    existingListing?.transmission || 'Automatic'
   );
   const [drivetrain, setDrivetrain] = useState<DrivetrainType>(
-    existingListing?.drivetrain || 'RWD'
+    existingListing?.drivetrain || 'FWD'
   );
   const [exteriorColor, setExteriorColor] = useState(
-    existingListing?.exteriorColor || 'Arctic Grey'
+    existingListing?.exteriorColor || 'Empowered Oxide'
   );
-  const [location, setLocation] = useState(existingListing?.location || 'Newport Beach, CA');
-  const [vin, setVin] = useState(existingListing?.vin || 'WP0AB2A95RS229104');
+  const [location, setLocation] = useState(existingListing?.location || 'Bengaluru, Karnataka');
+  const [vin, setVin] = useState(existingListing?.vin || 'KA01EV4590');
   const [imageUrl, setImageUrl] = useState(
     existingListing?.imageUrl || STUDIO_IMAGE_PRESETS[0].url
   );
   const [description, setDescription] = useState(
     existingListing?.description ||
-      'Single-owner collector specification with full service documentation, factory warranty coverage, and paint protection film applied from new.'
+      '140-point CARS24/BharatDrive Hub inspected vehicle. Single owner, zero insurance claims, comprehensive zero-depreciation insurance valid, and full authorized service history.'
   );
   const [status, setStatus] = useState<ListingStatus>(existingListing?.status || 'active');
   const [visibility, setVisibility] = useState<ListingVisibility>(
@@ -83,6 +91,30 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
   );
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Instant CARS24-style Valuation Estimator
+  const handleCalculateInstantValuation = () => {
+    const baseByBody: Record<string, number> = {
+      Hatchback: 750000,
+      Sedan: 1350000,
+      SUV: 1850000,
+      MPV: 2250000,
+      Coupe: 3500000,
+      Wagon: 1600000,
+      Convertible: 4200000,
+    };
+    const rawBase = baseByBody[bodyStyle] || 1500000;
+    const ageYears = Math.max(0, 2025 - year);
+    const depreciationFactor = Math.max(0.45, 1 - ageYears * 0.08 - (mileage / 100000) * 0.12);
+    const fuelMultiplier =
+      fuelType === 'Hybrid' || fuelType === 'Electric'
+        ? 1.08
+        : fuelType === 'Diesel'
+        ? 1.04
+        : 1.0;
+    const estimatedINR = Math.round((rawBase * depreciationFactor * fuelMultiplier) / 5000) * 5000;
+    setPrice(estimatedINR);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,7 +125,10 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
     const cleanModel = model.trim().slice(0, VALIDATION_RULES.MODEL_MAX);
     const cleanColor = exteriorColor.trim().slice(0, VALIDATION_RULES.COLOR_MAX);
     const cleanLocation = location.trim().slice(0, VALIDATION_RULES.LOCATION_MAX);
-    const cleanVin = vin.trim().toUpperCase();
+    const cleanVin = vin
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9\-]/g, '');
     const cleanDesc = description.trim().slice(0, VALIDATION_RULES.DESCRIPTION_MAX);
 
     if (cleanTitle.length < VALIDATION_RULES.TITLE_MIN) {
@@ -102,16 +137,16 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
     }
     if (!VALIDATION_RULES.VIN_PATTERN.test(cleanVin)) {
       setErrorMsg(
-        'VIN must be 11 to 17 uppercase alphanumeric characters (excluding I, O, Q).'
+        'RTO Registration / VIN must be 6 to 20 uppercase alphanumeric characters (e.g., KA01MJ8890).'
       );
       return;
     }
     if (price < VALIDATION_RULES.PRICE_MIN || price > VALIDATION_RULES.PRICE_MAX) {
-      setErrorMsg('Price must be between $1,000 and $10,000,000.');
+      setErrorMsg('Ex-Showroom / Hub price must be between ₹1,000 and ₹20,00,00,000.');
       return;
     }
     if (cleanDesc.length < VALIDATION_RULES.DESCRIPTION_MIN) {
-      setErrorMsg('Description must be at least 10 characters.');
+      setErrorMsg('Inspection description must be at least 10 characters.');
       return;
     }
 
@@ -181,9 +216,16 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-900 text-white">
           <div className="flex items-center gap-2.5">
             <Car className="w-5 h-5 text-amber-400" />
-            <h2 className="text-base font-semibold">
-              {existingListing ? 'Edit Consignment Listing' : 'Consign Vehicle on Veloce Reserve'}
-            </h2>
+            <div>
+              <h2 className="text-base font-semibold">
+                {existingListing
+                  ? 'Edit Indian Car Listing & Hub Price'
+                  : 'Sell Your Car in India — Instant Valuation & Hub Listing'}
+              </h2>
+              <p className="text-xs text-slate-400">
+                Real-time regional RTO on-road price calculation across 8 Indian states
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -197,7 +239,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                Listing Headline Title
+                Car Title (Year, Make, Model & Variant)
               </label>
               <input
                 type="text"
@@ -208,35 +250,51 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Asking Price (USD)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-700">
+                  Ex-Hub Price (₹ INR)
+                </label>
+                <button
+                  type="button"
+                  onClick={handleCalculateInstantValuation}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 hover:text-amber-800"
+                  title="Auto-calculate fair Indian market price"
+                >
+                  <Sparkles className="w-3 h-3" /> Auto-Value
+                </button>
+              </div>
               <input
                 type="number"
                 required
                 min={1000}
-                max={10000000}
+                max={200000000}
                 value={price}
                 onChange={(e) => setPrice(Number(e.target.value))}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono tabular-nums text-slate-900"
               />
+              <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
+                {formatINR(price)} ({formatLakhs(price)})
+              </div>
             </div>
           </div>
 
           {!existingListing && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Make</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Brand</label>
                 <input
                   type="text"
                   required
                   value={make}
                   onChange={(e) => setMake(e.target.value)}
+                  placeholder="Mahindra, Tata..."
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Model</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Model & Variant
+                </label>
                 <input
                   type="text"
                   required
@@ -246,11 +304,11 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Year</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Reg. Year</label>
                 <input
                   type="number"
                   required
-                  min={1950}
+                  min={1990}
                   max={2027}
                   value={year}
                   onChange={(e) => setYear(Number(e.target.value))}
@@ -258,13 +316,16 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">VIN</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  RTO Reg. / VIN
+                </label>
                 <input
                   type="text"
                   required
-                  maxLength={17}
+                  maxLength={20}
                   value={vin}
                   onChange={(e) => setVin(e.target.value.toUpperCase())}
+                  placeholder="KA01MJ8890"
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono uppercase text-slate-900"
                 />
               </div>
@@ -274,7 +335,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                Odometer (Miles)
+                Driven (Kilometers)
               </label>
               <input
                 type="number"
@@ -287,27 +348,33 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Location</label>
-              <input
-                type="text"
-                required
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Indian Hub City
+              </label>
+              <select
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900"
-              />
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
+              >
+                {INDIAN_REGIONS.map((r) => (
+                  <option key={r.code} value={`${r.city}, ${r.state}`}>
+                    {r.city}, {r.state}
+                  </option>
+                ))}
+              </select>
             </div>
             {!existingListing ? (
               <>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Body Style
+                    Body Type
                   </label>
                   <select
                     value={bodyStyle}
                     onChange={(e) => setBodyStyle(e.target.value as BodyStyle)}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
                   >
-                    {(['Coupe', 'Sedan', 'SUV', 'Wagon', 'Convertible'] as const).map((b) => (
+                    {(['SUV', 'Hatchback', 'Sedan', 'MPV', 'Coupe'] as const).map((b) => (
                       <option key={b} value={b}>
                         {b}
                       </option>
@@ -316,14 +383,14 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Powertrain
+                    Fuel Type
                   </label>
                   <select
                     value={fuelType}
                     onChange={(e) => setFuelType(e.target.value as FuelType)}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
                   >
-                    {(['Gasoline', 'Electric', 'Hybrid'] as const).map((f) => (
+                    {(['Petrol', 'Diesel', 'Electric', 'Hybrid', 'CNG'] as const).map((f) => (
                       <option key={f} value={f}>
                         {f}
                       </option>
@@ -357,7 +424,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
                   >
                     <option value="public">Public Marketplace</option>
-                    <option value="private">Private Vault</option>
+                    <option value="private">Private Hub Vault</option>
                   </select>
                 </div>
               </>
@@ -375,7 +442,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                   onChange={(e) => setTransmission(e.target.value as TransmissionType)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
                 >
-                  {(['Dual-Clutch', 'Manual', 'Automatic'] as const).map((t) => (
+                  {(['Automatic', 'Manual', 'DCT', 'CVT', 'AMT'] as const).map((t) => (
                     <option key={t} value={t}>
                       {t}
                     </option>
@@ -389,7 +456,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                   onChange={(e) => setDrivetrain(e.target.value as DrivetrainType)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
                 >
-                  {(['RWD', 'AWD', 'FWD'] as const).map((d) => (
+                  {(['FWD', 'AWD', '4WD', 'RWD'] as const).map((d) => (
                     <option key={d} value={d}>
                       {d}
                     </option>
@@ -414,7 +481,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
           {/* Studio Photo Selector */}
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1.5">
-              Studio Catalog Photography Preset or Custom URL
+              Indian Hub Photography Preset or Custom Image URL
             </label>
             <div className="flex flex-wrap gap-1.5 mb-2">
               {STUDIO_IMAGE_PRESETS.map((preset) => (
@@ -443,7 +510,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
 
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1">
-              Provenance, Build Sheet & Service History
+              140-Point Inspection Notes, Insurance Status & Service Record
             </label>
             <textarea
               rows={3}
@@ -477,7 +544,7 @@ export const ListingFormModal: React.FC<ListingFormModalProps> = ({
                 ? 'Publishing...'
                 : existingListing
                 ? 'Save Listing Changes'
-                : 'Publish Live Listing'}
+                : 'List Car on Marketplace'}
             </button>
           </div>
         </form>

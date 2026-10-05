@@ -23,11 +23,12 @@ import {
   RefreshCw,
   LogOut,
   Shield,
-  MessageSquare,
   Plus,
   SlidersHorizontal,
   ArrowUpRight,
   Check,
+  MapPin,
+  Calculator,
 } from 'lucide-react';
 import {
   auth,
@@ -41,11 +42,18 @@ import {
   CarListing,
   DirectMessage,
   FuelType,
+  INDIAN_REGIONS,
+  IndianRegionCode,
   INITIAL_SHOWCASE_LISTINGS,
   OrderTransaction,
   UserNotification,
   UserProfile,
   UserRole,
+  calculateAllRegionsOnRoad,
+  calculateRegionalOnRoadPrice,
+  formatINR,
+  formatLakhs,
+  normalizeToINR,
 } from './types/marketplace';
 import {
   requestPushPermission,
@@ -59,6 +67,7 @@ import { ListingFormModal } from './components/ListingFormModal';
 import { MessagingDrawer } from './components/MessagingDrawer';
 import { AdminAnalyticsView } from './components/AdminAnalyticsView';
 import { VehicleDetailModal } from './components/VehicleDetailModal';
+import { RegionalOnRoadModal } from './components/RegionalOnRoadModal';
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'sundarasarathi78@gmail.com';
 
@@ -66,6 +75,9 @@ export default function App() {
   const [fbUser, setFbUser] = useState<FirebaseUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
+  // Active Indian City / RTO Region for Real-Time On-Road Pricing
+  const [selectedRegion, setSelectedRegion] = useState<IndianRegionCode>('DL');
 
   // Navigation view state
   const [activeView, setActiveView] = useState<'marketplace' | 'admin_analytics'>('marketplace');
@@ -82,13 +94,14 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBodyStyle, setSelectedBodyStyle] = useState<'All' | BodyStyle>('All');
   const [selectedFuel, setSelectedFuel] = useState<'All' | FuelType>('All');
-  const [maxPrice, setMaxPrice] = useState<number>(300000);
+  const [maxPriceINR, setMaxPriceINR] = useState<number>(4500000); // ₹45 Lakh default slider max
   const [sortBy, setSortBy] = useState<
     'featured' | 'price_asc' | 'price_desc' | 'mileage_asc' | 'year_desc'
   >('featured');
 
   // Modals & Drawers
   const [detailListing, setDetailListing] = useState<CarListing | null>(null);
+  const [regionalModalListing, setRegionalModalListing] = useState<CarListing | null>(null);
   const [checkoutListing, setCheckoutListing] = useState<CarListing | null>(null);
   const [showListingForm, setShowListingForm] = useState(false);
   const [editingListing, setEditingListing] = useState<CarListing | null>(null);
@@ -112,11 +125,35 @@ export default function App() {
         userProfile?.role === 'admin')
   );
 
+  const activeRegionConfig = useMemo(
+    () => INDIAN_REGIONS.find((r) => r.code === selectedRegion) || INDIAN_REGIONS[0],
+    [selectedRegion]
+  );
+
   const showToast = (title: string, subtitle: string) => {
     setToastBanner({ title, subtitle });
     setTimeout(() => {
       setToastBanner((prev) => (prev?.title === title ? null : prev));
     }, 4500);
+  };
+
+  // Seed or refresh the 5 flagship Indian cars in Firestore
+  const seedIndianShowcaseToFirestore = async (uid: string, sellerDisplayName: string) => {
+    for (let i = 0; i < INITIAL_SHOWCASE_LISTINGS.length; i++) {
+      const item = INITIAL_SHOWCASE_LISTINGS[i];
+      const seedId = `india_lot_${i + 1}`;
+      try {
+        await setDoc(doc(db, 'listings', seedId), {
+          ...item,
+          sellerId: uid,
+          sellerName: sellerDisplayName || 'CARS24 / Veloce Assured Hub',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `listings/${seedId}`);
+      }
+    }
   };
 
   // 1. Auth Listener & Profile Bootstrap
@@ -158,7 +195,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // 2. Listen to Current User Profile & Seed Showcase Vehicles if DB is empty
+  // 2. Listen to Current User Profile
   useEffect(() => {
     if (!authReady || !fbUser) return;
 
@@ -178,7 +215,7 @@ export default function App() {
     return () => unsubProfile();
   }, [authReady, fbUser]);
 
-  // 3. Real-time Public Listings Listener
+  // 3. Real-time Public Listings Listener & Auto-Seed of Indian Cars
   useEffect(() => {
     const q = query(collection(db, 'listings'), where('visibility', '==', 'public'));
     const unsub = onSnapshot(
@@ -195,23 +232,13 @@ export default function App() {
           markSynced();
         }
 
-        // Seed initial 5 showcase listings once when an authenticated user has a profile and DB is empty
-        if (snap.empty && fbUser && userProfile) {
-          for (let i = 0; i < INITIAL_SHOWCASE_LISTINGS.length; i++) {
-            const item = INITIAL_SHOWCASE_LISTINGS[i];
-            const seedId = `veloce_lot_${i + 1}`;
-            try {
-              await setDoc(doc(db, 'listings', seedId), {
-                ...item,
-                sellerId: fbUser.uid,
-                sellerName: userProfile.displayName || 'Veloce Reserve Concierge',
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-            } catch (error) {
-              handleFirestoreError(error, OperationType.CREATE, `listings/${seedId}`);
-            }
-          }
+        // Automatically seed the 5 Indian cars if not yet present in Firestore when user is signed in
+        const hasIndianSeed = snap.docs.some((d) => d.id.startsWith('india_lot_'));
+        if (!hasIndianSeed && fbUser && userProfile) {
+          await seedIndianShowcaseToFirestore(
+            fbUser.uid,
+            userProfile.displayName || 'CARS24 / Veloce Assured Hub'
+          );
         }
       },
       (error) => {
@@ -222,7 +249,7 @@ export default function App() {
     return () => unsub();
   }, [fbUser, userProfile]);
 
-  // 4. Real-time Orders, Messages, Notifications, and Users Listeners for Authenticated User
+  // 4. Real-time Orders, Messages, Notifications, and Users Listeners
   useEffect(() => {
     if (!authReady || !fbUser) {
       setOrders([]);
@@ -232,7 +259,6 @@ export default function App() {
       return;
     }
 
-    // Orders listener
     const ordersQuery = isAdminUser
       ? collection(db, 'orders')
       : query(collection(db, 'orders'), where('buyerId', '==', fbUser.uid));
@@ -252,7 +278,6 @@ export default function App() {
       }
     );
 
-    // Messages sent & received listeners
     const sentQuery = query(collection(db, 'messages'), where('senderId', '==', fbUser.uid));
     const recQuery = query(collection(db, 'messages'), where('recipientId', '==', fbUser.uid));
 
@@ -302,7 +327,6 @@ export default function App() {
       }
     );
 
-    // Notifications listener
     const notifQuery = query(
       collection(db, 'notifications'),
       where('recipientId', '==', fbUser.uid)
@@ -324,7 +348,6 @@ export default function App() {
       }
     );
 
-    // Users list (Admin or self)
     const usersQuery = isAdminUser
       ? collection(db, 'users')
       : query(collection(db, 'users'), where('uid', '==', fbUser.uid));
@@ -349,28 +372,43 @@ export default function App() {
     };
   }, [authReady, fbUser, isAdminUser]);
 
-  // Combine Firestore listings with fallback showcase if database has not been seeded yet
+  // Combine Indian Showcase with live Firestore listings, prioritizing Indian hub vehicles
   const activeListings: CarListing[] = useMemo(() => {
-    if (firestoreListings.length > 0) {
-      return firestoreListings;
-    }
-    return INITIAL_SHOWCASE_LISTINGS.map((item, idx) => ({
+    const fallbackIndian: CarListing[] = INITIAL_SHOWCASE_LISTINGS.map((item, idx) => ({
       ...item,
-      id: `veloce_lot_${idx + 1}`,
+      id: `india_lot_${idx + 1}`,
       sellerId: 'veloce_concierge_specialist',
-      sellerName: 'Veloce Reserve Concierge',
+      sellerName: 'CARS24 / Veloce Assured Hub',
       createdAt: { toMillis: () => Date.now() } as CarListing['createdAt'],
       updatedAt: { toMillis: () => Date.now() } as CarListing['updatedAt'],
     }));
+
+    if (firestoreListings.length === 0) {
+      return fallbackIndian;
+    }
+
+    // Ensure Indian showcase cars are always visible even if DB previously only had legacy lots
+    const map = new Map<string, CarListing>();
+    for (const item of fallbackIndian) {
+      map.set(item.id, item);
+    }
+    for (const dbItem of firestoreListings) {
+      // Skip legacy USD demo lots (`veloce_lot_1..5`) so the marketplace is 100% real-world Indian cars,
+      // while keeping all `india_lot_*` and user-created `car_*` listings from Firestore!
+      if (dbItem.id.startsWith('veloce_lot_')) continue;
+      map.set(dbItem.id, dbItem);
+    }
+    return Array.from(map.values());
   }, [firestoreListings]);
 
-  // Filtered and sorted listings
+  // Filtered and sorted listings (by On-Road Price or Ex-Showroom)
   const filteredListings = useMemo(() => {
     return activeListings
       .filter((car) => {
         if (selectedBodyStyle !== 'All' && car.bodyStyle !== selectedBodyStyle) return false;
         if (selectedFuel !== 'All' && car.fuelType !== selectedFuel) return false;
-        if (car.price > maxPrice) return false;
+        const onRoad = calculateRegionalOnRoadPrice(car, selectedRegion);
+        if (onRoad.exShowroomPrice > maxPriceINR) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const match =
@@ -386,17 +424,36 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        if (sortBy === 'price_asc') return a.price - b.price;
-        if (sortBy === 'price_desc') return b.price - a.price;
+        const priceA = normalizeToINR(a.price);
+        const priceB = normalizeToINR(b.price);
+        if (sortBy === 'price_asc') return priceA - priceB;
+        if (sortBy === 'price_desc') return priceB - priceA;
         if (sortBy === 'mileage_asc') return a.mileage - b.mileage;
         if (sortBy === 'year_desc') return b.year - a.year;
         return Number(b.featured) - Number(a.featured);
       });
-  }, [activeListings, selectedBodyStyle, selectedFuel, maxPrice, searchQuery, sortBy]);
+  }, [
+    activeListings,
+    selectedBodyStyle,
+    selectedFuel,
+    maxPriceINR,
+    searchQuery,
+    sortBy,
+    selectedRegion,
+  ]);
 
   const heroListing = useMemo(() => {
-    return activeListings.find((c) => c.featured) || activeListings[0];
+    return (
+      activeListings.find((c) => c.id === 'india_lot_1') ||
+      activeListings.find((c) => c.featured) ||
+      activeListings[0]
+    );
   }, [activeListings]);
+
+  const heroOnRoad = useMemo(
+    () => (heroListing ? calculateRegionalOnRoadPrice(heroListing, selectedRegion) : null),
+    [heroListing, selectedRegion]
+  );
 
   const pendingSyncCount = useMemo(() => {
     const lCount = firestoreListings.filter((i) => i.hasPendingWrites).length;
@@ -419,7 +476,10 @@ export default function App() {
   const handleSignIn = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
-      showToast('Signed in to Veloce Reserve', 'Escrow vault, messaging, and offline sync enabled.');
+      showToast(
+        'Signed in to Veloce India',
+        'Real-time RTO on-road booking, hub messaging, and offline sync enabled.'
+      );
     } catch (error) {
       console.error('Authentication error:', error);
     }
@@ -433,7 +493,6 @@ export default function App() {
 
   const handleInspectListing = async (car: CarListing) => {
     setDetailListing(car);
-    // Increment view counter if backed by Firestore and user is signed in
     if (fbUser && firestoreListings.some((f) => f.id === car.id)) {
       try {
         await updateDoc(doc(db, 'listings', car.id), {
@@ -441,7 +500,7 @@ export default function App() {
           updatedAt: serverTimestamp(),
         });
       } catch {
-        // Ignore view increment error if offline or unverified
+        // Ignore view increment error if offline
       }
     }
   };
@@ -463,8 +522,8 @@ export default function App() {
     setPushStatus(perm);
     if (perm === 'granted') {
       triggerBrowserPushNotification(
-        'Veloce Reserve Real-Time Alerts Active',
-        'You will receive instant push notifications for escrow status updates and buyer inquiries.'
+        'Veloce India Real-Time Alerts Active',
+        'You will receive instant alerts for Vahan RC updates, token bookings, and test drive chats.'
       );
       showToast('Push Notifications Enabled', 'Real-time order and message alerts are active.');
     } else {
@@ -488,7 +547,7 @@ export default function App() {
           }}
           className="text-lg font-display font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
         >
-          Veloce Reserve
+          Veloce India
         </a>
 
         {/* Zone 2: 5 clean text navigation links */}
@@ -499,7 +558,15 @@ export default function App() {
               activeView === 'marketplace' ? 'text-slate-900 underline' : ''
             }`}
           >
-            Showroom
+            Buy Assured Cars
+          </button>
+          <button
+            onClick={() => {
+              if (heroListing) setRegionalModalListing(heroListing);
+            }}
+            className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
+          >
+            Regional On-Road Price
           </button>
           <button
             onClick={() => {
@@ -512,7 +579,7 @@ export default function App() {
             }}
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
           >
-            Consign Vehicle
+            Sell Your Car
           </button>
           <button
             onClick={() => {
@@ -525,7 +592,7 @@ export default function App() {
             }}
             className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
           >
-            Concierge{unreadMessagesCount > 0 ? ` (${unreadMessagesCount})` : ''}
+            Hub Chat{unreadMessagesCount > 0 ? ` (${unreadMessagesCount})` : ''}
           </button>
           <button
             onClick={() => {
@@ -540,12 +607,6 @@ export default function App() {
             }`}
           >
             Analytics & Admin
-          </button>
-          <button
-            onClick={() => setShowOfflineSyncModal(true)}
-            className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-          >
-            {isOnline ? 'Sync Vault' : 'Offline Mode Active'}
           </button>
         </nav>
 
@@ -599,7 +660,15 @@ export default function App() {
             activeView === 'marketplace' ? 'text-slate-900 font-semibold' : ''
           }`}
         >
-          Showroom
+          Buy Cars
+        </button>
+        <button
+          onClick={() => {
+            if (heroListing) setRegionalModalListing(heroListing);
+          }}
+          className="whitespace-nowrap"
+        >
+          On-Road Matrix
         </button>
         <button
           onClick={() => {
@@ -611,7 +680,7 @@ export default function App() {
           }}
           className="whitespace-nowrap"
         >
-          Consign
+          Sell Car
         </button>
         <button
           onClick={() => {
@@ -620,7 +689,7 @@ export default function App() {
           }}
           className="whitespace-nowrap"
         >
-          Messages{unreadMessagesCount > 0 ? ` (${unreadMessagesCount})` : ''}
+          Chat{unreadMessagesCount > 0 ? ` (${unreadMessagesCount})` : ''}
         </button>
         <button
           onClick={() => {
@@ -631,10 +700,7 @@ export default function App() {
             activeView === 'admin_analytics' ? 'text-slate-900 font-semibold' : ''
           }`}
         >
-          Analytics & Admin
-        </button>
-        <button onClick={() => setShowOfflineSyncModal(true)} className="whitespace-nowrap">
-          {isOnline ? 'Sync Status' : 'Offline Vault'}
+          Analytics
         </button>
       </div>
 
@@ -652,6 +718,7 @@ export default function App() {
           <AdminAnalyticsView
             currentUser={userProfile}
             isAdminUser={isAdminUser}
+            selectedRegion={selectedRegion}
             listings={activeListings}
             orders={orders}
             messages={messages}
@@ -664,12 +731,53 @@ export default function App() {
               setEditingListing(car);
               setShowListingForm(true);
             }}
+            onSyncIndianShowcase={async () => {
+              await seedIndianShowcaseToFirestore(
+                userProfile.uid,
+                userProfile.displayName || 'CARS24 / Veloce Assured Hub'
+              );
+              showToast(
+                'Indian Hub Fleet Synchronized',
+                '5 flagship Indian cars with INR pricing synced to Firestore.'
+              );
+            }}
           />
         ) : (
-          <div className="space-y-16 pb-20">
-            {/* SECTION 1: STOREFRONT HERO SHOWCASE */}
-            {heroListing && (
-              <section className="max-w-[1360px] mx-auto px-4 sm:px-8 pt-6 sm:pt-10">
+          <div className="space-y-14 pb-20">
+            {/* SECTION 1: STOREFRONT HERO SHOWCASE WITH LIVE REGIONAL ON-ROAD PRICE */}
+            {heroListing && heroOnRoad && (
+              <section className="max-w-[1360px] mx-auto px-4 sm:px-8 pt-6 sm:pt-8">
+                {/* Active Indian City / RTO Selector Bar */}
+                <div className="mb-4 p-3.5 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-700">
+                    <MapPin className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>
+                      Showing Real-Time On-Road Prices for:{' '}
+                      <strong className="text-slate-900">
+                        {activeRegionConfig.city}, {activeRegionConfig.state} (
+                        {activeRegionConfig.rtoPrefix})
+                      </strong>{' '}
+                      · Hub: {activeRegionConfig.hubName}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                    {INDIAN_REGIONS.map((reg) => (
+                      <button
+                        key={reg.code}
+                        onClick={() => setSelectedRegion(reg.code)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
+                          selectedRegion === reg.code
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {reg.city}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-lg">
                   <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
                     {/* Hero Image with Measured Scrim */}
@@ -682,11 +790,11 @@ export default function App() {
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/25 to-transparent lg:bg-gradient-to-r lg:from-transparent lg:via-slate-950/20 lg:to-slate-950" />
                     </div>
 
-                    {/* Hero Editorial & Purchase Action Column */}
+                    {/* Hero Editorial & Live Regional On-Road Column */}
                     <div className="lg:col-span-5 p-6 sm:p-10 flex flex-col justify-between text-white bg-slate-950">
                       <div className="space-y-4">
                         <div className="text-xs text-amber-400 tracking-wide">
-                          <span>Curated Flagship Lot</span>
+                          <span>140-Point Assured Flagship</span>
                           <span className="mx-1.5">·</span>
                           <span>{heroListing.location}</span>
                           <span className="mx-1.5">·</span>
@@ -704,45 +812,53 @@ export default function App() {
                           {heroListing.description}
                         </p>
 
-                        <div className="pt-3 flex items-center gap-4 text-xs text-slate-400">
-                          <span>{heroListing.mileage.toLocaleString()} miles</span>
+                        <div className="pt-2 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                          <span>{heroListing.mileage.toLocaleString('en-IN')} km</span>
+                          <span>·</span>
+                          <span>{heroListing.fuelType}</span>
                           <span>·</span>
                           <span>{heroListing.transmission}</span>
                           <span>·</span>
                           <span>{heroListing.drivetrain}</span>
-                          <span>·</span>
-                          <span>{heroListing.exteriorColor}</span>
                         </div>
                       </div>
 
-                      <div className="pt-8 mt-8 border-t border-slate-800 space-y-5">
+                      <div className="pt-6 mt-6 border-t border-slate-800 space-y-4">
                         <div className="flex items-baseline justify-between">
-                          <span className="text-xs text-slate-400">Direct Escrow Asking Price</span>
-                          <span className="text-2xl sm:text-3xl font-mono tabular-nums font-bold text-white">
-                            ${heroListing.price.toLocaleString()}
-                          </span>
+                          <div>
+                            <div className="text-xs text-amber-400 font-medium">
+                              On-Road Price in {heroOnRoad.region.city} ({heroOnRoad.region.rtoPrefix})
+                            </div>
+                            <div className="text-xs text-slate-400 mt-0.5">
+                              Ex-Showroom: {formatINR(heroOnRoad.exShowroomPrice)} + RTO Tax (
+                              {heroOnRoad.roadTaxPctApplied}%): {formatINR(heroOnRoad.rtoRoadTax)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-2xl sm:text-3xl font-mono tabular-nums font-bold text-white">
+                              {formatINR(heroOnRoad.totalOnRoadPrice)}
+                            </div>
+                            <div className="text-xs font-mono text-slate-400">
+                              {formatLakhs(heroOnRoad.totalOnRoadPrice)} · EMI{' '}
+                              {formatINR(heroOnRoad.monthlyEmiEstimate)}/mo
+                            </div>
+                          </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2.5">
                           <button
                             onClick={() => handleInspectListing(heroListing)}
-                            className="flex-1 py-3 px-5 rounded-lg bg-amber-500 text-slate-950 text-xs font-semibold hover:bg-amber-400 transition-colors whitespace-nowrap inline-flex items-center justify-center gap-1.5"
+                            className="flex-1 py-3 px-4 rounded-lg bg-amber-500 text-slate-950 text-xs font-semibold hover:bg-amber-400 transition-colors whitespace-nowrap inline-flex items-center justify-center gap-1.5"
                           >
-                            Inspect Dossier & Reserve
+                            Book Test Drive / Buy On-Road
                             <ArrowUpRight className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => {
-                              if (!userProfile) {
-                                handleSignIn();
-                              } else {
-                                setMessagingInitialListing(heroListing);
-                                setShowMessaging(true);
-                              }
-                            }}
-                            className="py-3 px-4 rounded-lg border border-slate-700 text-white text-xs font-medium hover:bg-slate-900 transition-colors whitespace-nowrap"
+                            onClick={() => setRegionalModalListing(heroListing)}
+                            className="py-3 px-3.5 rounded-lg border border-slate-700 text-white text-xs font-medium hover:bg-slate-900 transition-colors whitespace-nowrap inline-flex items-center gap-1.5"
                           >
-                            Message Seller
+                            <Calculator className="w-3.5 h-3.5 text-amber-400" />
+                            Compare 8 Cities
                           </button>
                         </div>
                       </div>
@@ -752,23 +868,24 @@ export default function App() {
               </section>
             )}
 
-            {/* SECTION 2: FILTERABLE REAL-TIME MARKETPLACE CATALOG */}
+            {/* SECTION 2: FILTERABLE REAL-TIME INDIAN CAR CATALOG */}
             <section id="showroom" className="max-w-[1360px] mx-auto px-4 sm:px-8 space-y-6">
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-4 border-b border-slate-200">
                 <div>
                   <h2 className="text-2xl font-display font-bold text-slate-900">
-                    Verified Collector & Performance Inventory
+                    140-Point Inspected Cars with Real-Time {activeRegionConfig.city} On-Road
+                    Pricing
                   </h2>
                   <p className="text-sm text-slate-600 mt-1">
-                    Real-time listings backed by independent mechanical inspection and escrow
-                    settlement
+                    Includes State RTO Road Tax ({activeRegionConfig.rtoPrefix}), Zero-Dep
+                    Insurance, 1% TCS, FASTag, and 7-Day Easy Return
                   </p>
                 </div>
 
                 <div className="flex items-center gap-3 text-xs text-slate-600">
                   <span>
                     Showing <strong className="font-mono">{filteredListings.length}</strong> of{' '}
-                    <strong className="font-mono">{activeListings.length}</strong> vehicles
+                    <strong className="font-mono">{activeListings.length}</strong> assured cars
                   </span>
                   <span>·</span>
                   <button
@@ -781,7 +898,7 @@ export default function App() {
                     }}
                     className="inline-flex items-center gap-1 font-semibold text-slate-900 hover:underline underline-offset-4"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Consign a Vehicle
+                    <Plus className="w-3.5 h-3.5" /> Sell Your Car
                   </button>
                 </div>
               </div>
@@ -796,14 +913,14 @@ export default function App() {
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search by make, model, year, exterior color, location, or VIN..."
+                      placeholder="Search Mahindra, Tata, Hyundai, Maruti, Toyota, city, or RTO code..."
                       className="w-full pl-9 pr-3.5 py-2 rounded-lg border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-slate-900"
                     />
                   </div>
 
                   {/* Body Style Segmented Filter */}
                   <div className="md:col-span-4 flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto">
-                    {(['All', 'Coupe', 'Sedan', 'SUV', 'Wagon'] as const).map((style) => (
+                    {(['All', 'SUV', 'MPV', 'Sedan', 'Hatchback'] as const).map((style) => (
                       <button
                         key={style}
                         onClick={() => setSelectedBodyStyle(style)}
@@ -826,61 +943,63 @@ export default function App() {
                       onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-900 bg-white focus:outline-none focus:border-slate-900"
                     >
-                      <option value="featured">Sort: Featured First</option>
-                      <option value="price_asc">Price: Low to High</option>
-                      <option value="price_desc">Price: High to Low</option>
-                      <option value="mileage_asc">Mileage: Lowest First</option>
-                      <option value="year_desc">Year: Newest First</option>
+                      <option value="featured">Sort: Assured Featured</option>
+                      <option value="price_asc">Price: Low to High (₹)</option>
+                      <option value="price_desc">Price: High to Low (₹)</option>
+                      <option value="mileage_asc">Driven: Lowest km First</option>
+                      <option value="year_desc">Reg. Year: Newest First</option>
                     </select>
                   </div>
                 </div>
 
-                {/* Secondary Filter Row: Powertrain + Price Ceiling */}
+                {/* Secondary Filter Row: Fuel Type + Max Budget in Lakhs */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500">Powertrain:</span>
+                  <div className="flex items-center gap-2 overflow-x-auto">
+                    <span className="text-xs text-slate-500 whitespace-nowrap">Fuel Type:</span>
                     <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-                      {(['All', 'Gasoline', 'Electric', 'Hybrid'] as const).map((fuel) => (
-                        <button
-                          key={fuel}
-                          onClick={() => setSelectedFuel(fuel)}
-                          className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                            selectedFuel === fuel
-                              ? 'bg-white text-slate-900 shadow-xs'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          {fuel}
-                        </button>
-                      ))}
+                      {(['All', 'Diesel', 'Petrol', 'Hybrid', 'Electric', 'CNG'] as const).map(
+                        (fuel) => (
+                          <button
+                            key={fuel}
+                            onClick={() => setSelectedFuel(fuel)}
+                            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                              selectedFuel === fuel
+                                ? 'bg-white text-slate-900 shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {fuel}
+                          </button>
+                        )
+                      )}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-slate-500 whitespace-nowrap">
-                      Max Price:{' '}
+                      Max Ex-Showroom:{' '}
                       <strong className="font-mono tabular-nums text-slate-900">
-                        ${maxPrice.toLocaleString()}
+                        {formatLakhs(maxPriceINR)} ({formatINR(maxPriceINR)})
                       </strong>
                     </span>
                     <input
                       type="range"
-                      min={50000}
-                      max={300000}
-                      step={5000}
-                      value={maxPrice}
-                      onChange={(e) => setMaxPrice(Number(e.target.value))}
+                      min={600000}
+                      max={4500000}
+                      step={100000}
+                      value={maxPriceINR}
+                      onChange={(e) => setMaxPriceINR(Number(e.target.value))}
                       className="w-36 accent-slate-900"
                     />
                     {(selectedBodyStyle !== 'All' ||
                       selectedFuel !== 'All' ||
-                      maxPrice < 300000 ||
+                      maxPriceINR < 4500000 ||
                       searchQuery) && (
                       <button
                         onClick={() => {
                           setSelectedBodyStyle('All');
                           setSelectedFuel('All');
-                          setMaxPrice(300000);
+                          setMaxPriceINR(4500000);
                           setSearchQuery('');
                         }}
                         className="text-xs font-medium text-slate-600 hover:text-slate-900 underline"
@@ -912,17 +1031,17 @@ export default function App() {
               ) : filteredListings.length === 0 ? (
                 <div className="rounded-xl bg-white border border-slate-200 p-12 text-center space-y-3">
                   <p className="text-base font-semibold text-slate-900">
-                    No vehicles match your current filter criteria
+                    No cars match your current filter criteria
                   </p>
                   <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    Try expanding your maximum price slider or clearing your powertrain and chassis
+                    Try expanding your maximum budget slider or clearing your fuel and body type
                     filters.
                   </p>
                   <button
                     onClick={() => {
                       setSelectedBodyStyle('All');
                       setSelectedFuel('All');
-                      setMaxPrice(300000);
+                      setMaxPriceINR(4500000);
                       setSearchQuery('');
                     }}
                     className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 transition-colors"
@@ -932,162 +1051,283 @@ export default function App() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-7">
-                  {filteredListings.map((car) => (
-                    <article
-                      key={car.id}
-                      onClick={() => handleInspectListing(car)}
-                      className="group cursor-pointer rounded-xl bg-white border border-slate-200 overflow-hidden transition-transform duration-150 hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between"
-                    >
-                      <div>
-                        {/* 4:3 Studio Vehicle Imagery */}
-                        <div className="aspect-4/3 w-full bg-[#18181B] overflow-hidden relative">
-                          <VehicleImage
-                            src={car.imageUrl}
-                            alt={car.title}
-                            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-                          />
-                        </div>
-
-                        {/* Card Copy — Zero Pill Metadata Discipline */}
-                        <div className="p-5 space-y-2">
-                          <div className="flex items-center justify-between text-xs text-slate-500">
-                            <span>
-                              {car.make} · {car.bodyStyle} · {car.fuelType}
-                            </span>
-                            <span
-                              className={`font-medium capitalize ${
-                                car.status === 'active'
-                                  ? 'text-emerald-700'
-                                  : car.status === 'reserved'
-                                  ? 'text-amber-700'
-                                  : 'text-slate-500'
-                              }`}
-                            >
-                              {car.hasPendingWrites ? 'Syncing' : car.status}
-                            </span>
+                  {filteredListings.map((car) => {
+                    const onRoad = calculateRegionalOnRoadPrice(car, selectedRegion);
+                    return (
+                      <article
+                        key={car.id}
+                        onClick={() => handleInspectListing(car)}
+                        className="group cursor-pointer rounded-xl bg-white border border-slate-200 overflow-hidden transition-transform duration-150 hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between"
+                      >
+                        <div>
+                          {/* 4:3 Studio Vehicle Imagery */}
+                          <div className="aspect-4/3 w-full bg-[#18181B] overflow-hidden relative">
+                            <VehicleImage
+                              src={car.imageUrl}
+                              alt={car.title}
+                              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                            />
                           </div>
 
-                          <h3 className="text-base font-semibold text-slate-900 group-hover:text-slate-700 transition-colors line-clamp-1">
-                            {car.title}
-                          </h3>
+                          {/* Card Copy — Zero Pill Metadata Discipline */}
+                          <div className="p-5 space-y-2">
+                            <div className="flex items-center justify-between text-xs text-slate-500">
+                              <span>
+                                {car.year} · {car.make} · {car.fuelType}
+                              </span>
+                              <span
+                                className={`font-medium capitalize ${
+                                  car.status === 'active'
+                                    ? 'text-emerald-700'
+                                    : car.status === 'reserved'
+                                    ? 'text-amber-700'
+                                    : 'text-slate-500'
+                                }`}
+                              >
+                                {car.hasPendingWrites ? 'Syncing' : car.status}
+                              </span>
+                            </div>
 
-                          <div className="text-xs text-slate-500">
-                            <span className="font-mono tabular-nums">
-                              {car.mileage.toLocaleString()} mi
-                            </span>
-                            <span className="mx-1.5">·</span>
-                            <span>{car.transmission}</span>
-                            <span className="mx-1.5">·</span>
-                            <span>{car.location}</span>
+                            <h3 className="text-base font-semibold text-slate-900 group-hover:text-slate-700 transition-colors line-clamp-1">
+                              {car.title}
+                            </h3>
+
+                            <div className="text-xs text-slate-500">
+                              <span className="font-mono tabular-nums">
+                                {car.mileage.toLocaleString('en-IN')} km
+                              </span>
+                              <span className="mx-1.5">·</span>
+                              <span>{car.transmission}</span>
+                              <span className="mx-1.5">·</span>
+                              <span className="font-mono">{car.vin.slice(0, 4)}</span>
+                              <span className="mx-1.5">·</span>
+                              <span>{car.location.split(',')[0]}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Price & Quick Action Baseline */}
-                      <div className="px-5 py-3.5 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
-                        <div className="text-[15px] font-mono tabular-nums font-semibold text-slate-900">
-                          ${car.price.toLocaleString()}
-                        </div>
+                        {/* Regional On-Road & Ex-Showroom Price Baseline */}
+                        <div className="px-5 py-3.5 border-t border-slate-100 bg-slate-50/70 space-y-2.5">
+                          <div className="flex items-baseline justify-between">
+                            <div>
+                              <div className="text-[11px] text-slate-500">
+                                On-Road {onRoad.region.city} ({onRoad.region.rtoPrefix})
+                              </div>
+                              <div className="text-base font-mono tabular-nums font-bold text-slate-900">
+                                {formatINR(onRoad.totalOnRoadPrice)}{' '}
+                                <span className="text-xs font-normal text-slate-500">
+                                  ({formatLakhs(onRoad.totalOnRoadPrice)})
+                                </span>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-[11px] text-slate-500">Ex-Hub</div>
+                              <div className="text-xs font-mono tabular-nums font-medium text-slate-700">
+                                {formatLakhs(onRoad.exShowroomPrice)}
+                              </div>
+                            </div>
+                          </div>
 
-                        <div
-                          className="flex items-center gap-3"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button
-                            onClick={() => {
-                              if (!userProfile) {
-                                handleSignIn();
-                              } else {
-                                setMessagingInitialListing(car);
-                                setShowMessaging(true);
-                              }
-                            }}
-                            className="text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                          <div
+                            className="flex items-center justify-between pt-2 border-t border-slate-200/70"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            Inquire
-                          </button>
-                          {car.status === 'active' ? (
                             <button
-                              onClick={() => {
-                                if (!userProfile) {
-                                  handleSignIn();
-                                } else {
-                                  setCheckoutListing(car);
-                                }
-                              }}
-                              className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 transition-colors whitespace-nowrap"
+                              onClick={() => setRegionalModalListing(car)}
+                              className="text-xs font-medium text-amber-800 hover:text-amber-950 transition-colors inline-flex items-center gap-1"
                             >
-                              Reserve
+                              <Calculator className="w-3.5 h-3.5" />
+                              8-City On-Road
                             </button>
-                          ) : (
-                            <span className="text-xs font-medium text-slate-400 capitalize">
-                              {car.status}
-                            </span>
-                          )}
+
+                            <div className="flex items-center gap-2.5">
+                              <button
+                                onClick={() => {
+                                  if (!userProfile) {
+                                    handleSignIn();
+                                  } else {
+                                    setMessagingInitialListing(car);
+                                    setShowMessaging(true);
+                                  }
+                                }}
+                                className="text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                              >
+                                Chat
+                              </button>
+                              {car.status === 'active' ? (
+                                <button
+                                  onClick={() => {
+                                    if (!userProfile) {
+                                      handleSignIn();
+                                    } else {
+                                      setCheckoutListing(car);
+                                    }
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 transition-colors whitespace-nowrap"
+                                >
+                                  Book ₹10k
+                                </button>
+                              ) : (
+                                <span className="text-xs font-medium text-slate-400 capitalize">
+                                  {car.status}
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </section>
 
-            {/* SECTION 3: PROVENANCE, ESCROW ARCHITECTURE & QUANTITATIVE PROOF */}
+            {/* SECTION 3: INTERACTIVE PAN-INDIA REGIONAL ON-ROAD TAX COMPARISON TABLE */}
+            {heroListing && (
+              <section className="max-w-[1360px] mx-auto px-4 sm:px-8">
+                <div className="rounded-2xl bg-white border border-slate-200 overflow-hidden">
+                  <div className="p-6 sm:p-8 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <div className="text-xs text-slate-500">
+                        <span>01. Live State RTO Road Tax & On-Road Price Matrix</span>
+                        <span className="mx-1.5">·</span>
+                        <span>Vahan-Synced Regional Engine</span>
+                      </div>
+                      <h2 className="text-xl sm:text-2xl font-display font-bold text-slate-900 mt-1">
+                        How On-Road Price Varies Across Indian Regions ({heroListing.title})
+                      </h2>
+                    </div>
+                    <button
+                      onClick={() => setRegionalModalListing(heroListing)}
+                      className="px-4 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-colors whitespace-nowrap self-start md:self-auto"
+                    >
+                      Open Full Tax Calculator
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500">
+                          <th className="py-3 px-6">Indian City & State RTO</th>
+                          <th className="py-3 px-4 text-right">Ex-Showroom / Hub</th>
+                          <th className="py-3 px-4 text-right">State Road Tax</th>
+                          <th className="py-3 px-4 text-right">Zero-Dep Ins. + 1% TCS</th>
+                          <th className="py-3 px-4 text-right">RC + FASTag + Hub</th>
+                          <th className="py-3 px-6 text-right">Total On-Road Price (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 text-xs">
+                        {calculateAllRegionsOnRoad(heroListing).map((row) => {
+                          const isCurrent = row.region.code === selectedRegion;
+                          return (
+                            <tr
+                              key={row.region.code}
+                              onClick={() => setSelectedRegion(row.region.code)}
+                              className={`cursor-pointer transition-colors ${
+                                isCurrent ? 'bg-amber-50/60 font-medium' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <td className="py-3.5 px-6">
+                                <span className="font-semibold text-slate-900">
+                                  {row.region.city}
+                                </span>
+                                <span className="mx-1.5 text-slate-400">·</span>
+                                <span className="text-slate-500">{row.region.state}</span>
+                                <span className="ml-1.5 font-mono text-[11px] text-slate-500">
+                                  ({row.region.rtoPrefix})
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums text-slate-700">
+                                {formatINR(row.exShowroomPrice)}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums text-slate-800">
+                                {formatINR(row.rtoRoadTax)} ({row.roadTaxPctApplied}%)
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums text-slate-600">
+                                {formatINR(row.insuranceZeroDep + row.tcsCharge)}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums text-slate-600">
+                                {formatINR(
+                                  row.fastagAndHsrp +
+                                    row.rcTransferAndGreenCess +
+                                    row.interStateNocLogistics
+                                )}
+                              </td>
+                              <td className="py-3.5 px-6 text-right font-mono tabular-nums font-bold text-slate-900">
+                                {formatINR(row.totalOnRoadPrice)}{' '}
+                                <span className="text-[11px] font-normal text-slate-500">
+                                  ({formatLakhs(row.totalOnRoadPrice)})
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* SECTION 4: TRUST, ASSURED INSPECTION & CUSTOMER PROOF */}
             <section className="max-w-[1360px] mx-auto px-4 sm:px-8">
               <div className="rounded-2xl bg-white border border-slate-200 p-6 sm:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
                 <div className="lg:col-span-7 space-y-4">
                   <div className="text-xs text-slate-500">
-                    <span>01. Institutional Settlement & Offline Resilience</span>
+                    <span>02. Assured Quality & Paperless Vahan RC Transfer</span>
                     <span className="mx-1.5">·</span>
-                    <span>ISO-27001 Escrow Custody</span>
+                    <span>7-Day Money-Back Protection</span>
                   </div>
                   <h2
                     className="text-2xl sm:text-3xl font-display font-bold text-slate-900"
                     style={{ textWrap: 'balance' }}
                   >
-                    Every transaction is protected by multi-stage escrow, direct specialist
-                    messaging, and automatic offline synchronization.
+                    Every car passes a 140-point hub inspection with transparent state-wise on-road
+                    pricing and automated RC transfer.
                   </h2>
                   <p className="text-sm text-slate-600 leading-relaxed max-w-2xl">
-                    Whether inspecting a vehicle in an underground storage vault without cellular
-                    reception or executing a cross-border wire settlement, Veloce Reserve caches
-                    dossiers locally and synchronizes orders and messages automatically once
-                    connectivity is restored.
+                    Unlike classified portals with hidden dealer handling fees or uncertain RTO
+                    charges, Veloce India computes exact state road tax, 1% TCS, zero-depreciation
+                    insurance, and inter-state NOC logistics upfront—with full offline browsing and
+                    automatic cloud sync.
                   </p>
                   <div className="pt-2 flex flex-wrap gap-6 text-xs">
                     <div>
                       <div className="text-lg font-mono tabular-nums font-bold text-slate-900">
-                        $142.8M+
+                        ₹485 Cr+
                       </div>
-                      <div className="text-slate-500">Escrow Volume Settled in 12 Months</div>
+                      <div className="text-slate-500">Annualized Indian Car Transactions</div>
                     </div>
                     <div>
                       <div className="text-lg font-mono tabular-nums font-bold text-slate-900">
-                        11.4 Days
+                        8 Metro Hubs
                       </div>
-                      <div className="text-slate-500">Median Time from Listing to Funded Wire</div>
+                      <div className="text-slate-500">
+                        Delhi NCR, Mumbai, Bengaluru, Chennai, Hyderabad, Pune, Ahmedabad, Kochi
+                      </div>
                     </div>
                     <div>
                       <div className="text-lg font-mono tabular-nums font-bold text-slate-900">
-                        100%
+                        140 Checkpoints
                       </div>
-                      <div className="text-slate-500">VIN & Paint-Meter Verified Inventory</div>
+                      <div className="text-slate-500">Flood, Odometer & Chassis Verified</div>
                     </div>
                   </div>
                 </div>
 
-                {/* Attributable Testimonial (Claim-to-Proof Adjacency) */}
+                {/* Attributable Indian Customer Testimonial */}
                 <div className="lg:col-span-5 p-6 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
                   <p className="text-sm text-slate-700 leading-relaxed italic">
-                    “Before moving our private collection sales to Veloce Reserve, wire verification
-                    and pre-purchase inspection coordination took nearly three weeks per vehicle.
-                    With integrated escrow holds and direct dossier messaging, we closed our 992 GT3
-                    Touring in 48 hours with zero settlement friction.”
+                    “Comparing the on-road cost between Bengaluru KA-01 and Chennai TN-01 helped me
+                    understand the exact road tax and TCS breakdown before paying my ₹10,000 booking
+                    token. The Creta SX(O) Turbo was delivered to my Whitefield apartment with
+                    complete Vahan RC transfer in 5 days.”
                   </p>
                   <div className="text-xs">
-                    <div className="font-semibold text-slate-900">Marcus Vance</div>
+                    <div className="font-semibold text-slate-900">Arjun Subramanian</div>
                     <div className="text-slate-500">
-                      Managing Director, Vance Motorsport Holdings (Monterey, CA)
+                      Principal Systems Architect, Bengaluru (KA-01 Buyer)
                     </div>
                   </div>
                 </div>
@@ -1101,16 +1341,16 @@ export default function App() {
       <footer className="border-t border-slate-200 bg-white px-4 sm:px-8 py-6">
         <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <div>
-            <span>© {new Date().getFullYear()} Veloce Reserve Exchange</span>
+            <span>© {new Date().getFullYear()} Veloce India Auto Exchange</span>
             <span className="mx-2">·</span>
-            <span>Collector & Performance Vehicle Marketplace</span>
+            <span>Real-Time Indian Cars & Regional On-Road Price Platform</span>
           </div>
           <div className="flex items-center gap-5">
             <button
               onClick={() => setShowOfflineSyncModal(true)}
               className="hover:text-slate-900 transition-colors"
             >
-              Offline Sync & Push Settings
+              Offline Vault & Push Settings
             </button>
             <button
               onClick={() => {
@@ -1119,13 +1359,13 @@ export default function App() {
               }}
               className="hover:text-slate-900 transition-colors"
             >
-              Executive Analytics
+              Hub Analytics & Admin
             </button>
           </div>
         </div>
       </footer>
 
-      {/*PERSISTENT OFFLINE / PENDING SYNC INDICATOR */}
+      {/* PERSISTENT OFFLINE / PENDING SYNC INDICATOR */}
       {(!isOnline || pendingSyncCount > 0) && (
         <div className="fixed bottom-4 left-4 z-40 flex items-center gap-3 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-medium text-white shadow-xl border border-slate-700">
           <WifiOff className="w-4 h-4 text-amber-400 shrink-0" />
@@ -1154,12 +1394,18 @@ export default function App() {
       {detailListing && (
         <VehicleDetailModal
           listing={detailListing}
+          selectedRegion={selectedRegion}
+          onSelectRegion={setSelectedRegion}
           currentUser={userProfile}
           isAdminUser={isAdminUser}
           onClose={() => setDetailListing(null)}
           onOpenCheckout={(car) => {
             setDetailListing(null);
             setCheckoutListing(car);
+          }}
+          onOpenRegionalMatrix={(car) => {
+            setDetailListing(null);
+            setRegionalModalListing(car);
           }}
           onOpenMessage={(car) => {
             setDetailListing(null);
@@ -1178,19 +1424,38 @@ export default function App() {
         />
       )}
 
+      {/* ALL-INDIA REGIONAL ON-ROAD PRICE MATRIX MODAL */}
+      {regionalModalListing && (
+        <RegionalOnRoadModal
+          listing={regionalModalListing}
+          selectedRegion={selectedRegion}
+          onSelectRegion={setSelectedRegion}
+          onClose={() => setRegionalModalListing(null)}
+          onProceedToBook={(car) => {
+            if (!userProfile) {
+              handleSignIn();
+            } else {
+              setCheckoutListing(car);
+            }
+          }}
+        />
+      )}
+
       {/* SECURE ESCROW CHECKOUT MODAL */}
       {checkoutListing && userProfile && (
         <CheckoutModal
           listing={checkoutListing}
+          selectedRegion={selectedRegion}
+          onSelectRegion={setSelectedRegion}
           currentUser={userProfile}
           isOnline={isOnline}
           onClose={() => setCheckoutListing(null)}
           onSuccess={(orderId) => {
             showToast(
-              `Order #${orderId.slice(-6).toUpperCase()} Recorded`,
+              `Booking #${orderId.slice(-6).toUpperCase()} Recorded`,
               isOnline
-                ? 'Escrow payment processed and synced in real time.'
-                : 'Order queued in Offline Vault; will sync automatically when online.'
+                ? 'INR payment processed and synced in real time.'
+                : 'Booking queued in Offline Vault; will sync automatically when online.'
             );
           }}
         />
@@ -1207,9 +1472,9 @@ export default function App() {
           }}
           onSaved={() => {
             showToast(
-              editingListing ? 'Listing Updated' : 'Vehicle Consigned Live',
+              editingListing ? 'Car Listing Updated' : 'Car Listed Live in INR',
               isOnline
-                ? 'Published to the real-time marketplace.'
+                ? 'Published to the real-time Indian marketplace.'
                 : 'Saved to Offline Vault; will sync automatically when online.'
             );
           }}
@@ -1237,7 +1502,7 @@ export default function App() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-900 text-white">
               <div className="flex items-center gap-2">
                 <Bell className="w-4 h-4 text-amber-400" />
-                <h2 className="text-sm font-semibold">Real-Time Order & Dossier Alerts</h2>
+                <h2 className="text-sm font-semibold">Real-Time Booking & Vahan Alerts</h2>
               </div>
               <button
                 onClick={() => setShowNotificationsDrawer(false)}
@@ -1267,8 +1532,8 @@ export default function App() {
             <div className="flex-1 overflow-y-auto divide-y divide-slate-200">
               {notifications.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-500">
-                  No notifications yet. Order updates, escrow releases, and buyer messages appear
-                  here in real time.
+                  No notifications yet. Token bookings, RC transfer updates, and test drive chats
+                  appear here in real time.
                 </div>
               ) : (
                 notifications.map((n) => (
@@ -1327,10 +1592,10 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-slate-600 leading-relaxed">
-                  Veloce Reserve uses persistent IndexedDB caching. When offline, you can continue
-                  browsing listings, submitting consignment updates, reserving vehicles, and sending
-                  messages. All queued writes synchronize automatically as soon as connectivity is
-                  restored.
+                  Veloce India uses persistent IndexedDB caching. When offline, you can continue
+                  comparing regional on-road prices across all 8 Indian states, booking cars, and
+                  sending messages. All queued writes synchronize automatically as soon as
+                  connectivity is restored.
                 </p>
                 <div className="pt-2 flex items-center justify-between text-slate-500 border-t border-slate-200">
                   <span>Pending Local Writes: {pendingSyncCount}</span>

@@ -62,7 +62,7 @@
     },
     "CarListing": {
       "title": "CarListing",
-      "description": "Vehicle listing on the Veloce Reserve marketplace.",
+      "description": "Indian vehicle listing with regional RTO and INR pricing.",
       "type": "object",
       "properties": {
         "title": {
@@ -75,44 +75,44 @@
           "type": "string",
           "minLength": 2,
           "maxLength": 50,
-          "description": "Manufacturer make."
+          "description": "Manufacturer make (e.g., Mahindra, Tata, Hyundai, Maruti Suzuki)."
         },
         "model": {
           "type": "string",
           "minLength": 1,
           "maxLength": 60,
-          "description": "Vehicle model designation."
+          "description": "Vehicle model and variant designation."
         },
         "year": {
           "type": "integer",
-          "description": "Model year (1950-2027)."
+          "description": "Registration / Model year (1990-2027)."
         },
         "price": {
           "type": "number",
-          "description": "Listing price in USD."
+          "description": "Base Ex-Showroom / Hub price in INR."
         },
         "mileage": {
           "type": "integer",
-          "description": "Odometer mileage in miles."
+          "description": "Odometer reading in kilometers (km)."
         },
         "bodyStyle": {
           "type": "string",
-          "enum": ["Coupe", "Sedan", "SUV", "Wagon", "Convertible"],
+          "enum": ["SUV", "Sedan", "Hatchback", "MPV", "Coupe", "Wagon", "Convertible"],
           "description": "Chassis body style."
         },
         "fuelType": {
           "type": "string",
-          "enum": ["Electric", "Hybrid", "Gasoline"],
+          "enum": ["Petrol", "Diesel", "Electric", "Hybrid", "CNG", "Gasoline"],
           "description": "Powertrain fuel type."
         },
         "transmission": {
           "type": "string",
-          "enum": ["Automatic", "Manual", "Dual-Clutch"],
+          "enum": ["Automatic", "Manual", "AMT", "DCT", "CVT", "Dual-Clutch"],
           "description": "Transmission specification."
         },
         "drivetrain": {
           "type": "string",
-          "enum": ["AWD", "RWD", "FWD"],
+          "enum": ["FWD", "RWD", "AWD", "4WD"],
           "description": "Drivetrain layout."
         },
         "exteriorColor": {
@@ -125,14 +125,14 @@
           "type": "string",
           "minLength": 2,
           "maxLength": 80,
-          "description": "City and state location of the vehicle."
+          "description": "Indian city and state hub location."
         },
         "vin": {
           "type": "string",
-          "minLength": 11,
-          "maxLength": 17,
-          "pattern": "^[A-HJ-NPR-Z0-9]{11,17}$",
-          "description": "Vehicle Identification Number."
+          "minLength": 6,
+          "maxLength": 20,
+          "pattern": "^[A-Z0-9\\-]{6,20}$",
+          "description": "RTO Registration Code / Chassis VIN."
         },
         "imageUrl": {
           "type": "string",
@@ -144,7 +144,7 @@
           "type": "string",
           "minLength": 10,
           "maxLength": 2000,
-          "description": "Detailed provenance, factory options, and service history."
+          "description": "140-point inspection summary, ownership history, and variant specs."
         },
         "sellerId": {
           "type": "string",
@@ -157,7 +157,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 80,
-          "description": "Display name of the seller or dealership."
+          "description": "Display name of the hub or verified seller."
         },
         "status": {
           "type": "string",
@@ -171,7 +171,7 @@
         },
         "featured": {
           "type": "boolean",
-          "description": "Whether the vehicle is highlighted in the curated collection."
+          "description": "Whether the vehicle is highlighted in the assured showcase."
         },
         "viewsCount": {
           "type": "integer",
@@ -216,7 +216,7 @@
     },
     "OrderTransaction": {
       "title": "OrderTransaction",
-      "description": "Escrow payment or reservation order for a vehicle listing.",
+      "description": "INR booking or on-road escrow transaction for a vehicle listing.",
       "type": "object",
       "properties": {
         "listingId": {
@@ -254,11 +254,20 @@
         },
         "amount": {
           "type": "number",
-          "description": "Transaction amount in USD."
+          "description": "Transaction amount in INR."
         },
         "paymentType": {
           "type": "string",
-          "enum": ["Reservation Deposit", "Full Escrow Wire", "Instant Card Checkout", "Pre-Approved Financing"],
+          "enum": [
+            "Token Booking (UPI/Card)",
+            "Full On-Road RTGS/NEFT Escrow",
+            "Instant Card / NetBanking",
+            "Pre-Approved Bank Auto Loan",
+            "Reservation Deposit",
+            "Full Escrow Wire",
+            "Instant Card Checkout",
+            "Pre-Approved Financing"
+          ],
           "description": "Selected payment settlement method."
         },
         "paymentLast4": {
@@ -266,18 +275,18 @@
           "minLength": 4,
           "maxLength": 4,
           "pattern": "^[0-9]{4}$",
-          "description": "Last 4 digits of payment instrument or wire reference."
+          "description": "Last 4 digits of UPI ref, card, or bank account."
         },
         "shippingAddress": {
           "type": "string",
           "minLength": 5,
           "maxLength": 250,
-          "description": "Enclosed carrier delivery destination or pickup facility."
+          "description": "Home delivery address or CARS24/Veloce Hub pickup location with RTO region."
         },
         "status": {
           "type": "string",
           "enum": ["processing", "escrow_funded", "completed", "cancelled"],
-          "description": "Escrow settlement status."
+          "description": "Escrow & RC transfer settlement status."
         },
         "createdAt": {
           "type": "string",
@@ -465,11 +474,11 @@
     },
     "/listings/{listingId}": {
       "schema": { "$ref": "#/entities/CarListing" },
-      "description": "Real-time vehicle listings on the marketplace."
+      "description": "Real-time Indian vehicle listings on the marketplace."
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/OrderTransaction" },
-      "description": "Escrow payment and vehicle reservation transactions."
+      "description": "INR escrow payment and vehicle reservation transactions."
     },
     "/messages/{messageId}": {
       "schema": { "$ref": "#/entities/DirectMessage" },

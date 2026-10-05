@@ -68,15 +68,15 @@ service cloud.firestore {
         data.make is string && data.make.size() >= 2 && data.make.size() <= 50 &&
         data.model is string && data.model.size() >= 1 && data.model.size() <= 60 &&
         data.year is int && data.year >= 1950 && data.year <= 2027 &&
-        data.price is number && data.price >= 1000 && data.price <= 10000000 &&
+        data.price is number && data.price >= 1000 && data.price <= 200000000 &&
         data.mileage is int && data.mileage >= 0 && data.mileage <= 500000 &&
-        data.bodyStyle is string && data.bodyStyle in ['Coupe', 'Sedan', 'SUV', 'Wagon', 'Convertible'] &&
-        data.fuelType is string && data.fuelType in ['Electric', 'Hybrid', 'Gasoline'] &&
-        data.transmission is string && data.transmission in ['Automatic', 'Manual', 'Dual-Clutch'] &&
-        data.drivetrain is string && data.drivetrain in ['AWD', 'RWD', 'FWD'] &&
+        data.bodyStyle is string && data.bodyStyle in ['SUV', 'Sedan', 'Hatchback', 'MPV', 'Coupe', 'Wagon', 'Convertible'] &&
+        data.fuelType is string && data.fuelType in ['Petrol', 'Diesel', 'Electric', 'Hybrid', 'CNG', 'Gasoline'] &&
+        data.transmission is string && data.transmission in ['Automatic', 'Manual', 'AMT', 'DCT', 'CVT', 'Dual-Clutch'] &&
+        data.drivetrain is string && data.drivetrain in ['FWD', 'RWD', 'AWD', '4WD'] &&
         data.exteriorColor is string && data.exteriorColor.size() >= 2 && data.exteriorColor.size() <= 40 &&
         data.location is string && data.location.size() >= 2 && data.location.size() <= 80 &&
-        data.vin is string && data.vin.size() >= 11 && data.vin.size() <= 17 && data.vin.matches('^[A-HJ-NPR-Z0-9]{11,17}$') &&
+        data.vin is string && data.vin.size() >= 6 && data.vin.size() <= 20 && data.vin.matches('^[A-Z0-9\\-]{6,20}$') &&
         data.imageUrl is string && data.imageUrl.size() >= 5 && data.imageUrl.size() <= 500 &&
         data.description is string && data.description.size() >= 10 && data.description.size() <= 2000 &&
         data.sellerId is string && data.sellerId.size() >= 1 && data.sellerId.size() <= 128 && data.sellerId.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -105,8 +105,17 @@ service cloud.firestore {
         data.buyerId is string && data.buyerId.size() >= 1 && data.buyerId.size() <= 128 && data.buyerId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.buyerName is string && data.buyerName.size() >= 1 && data.buyerName.size() <= 80 &&
         data.sellerId is string && data.sellerId.size() >= 1 && data.sellerId.size() <= 128 && data.sellerId.matches('^[a-zA-Z0-9_\\-]+$') &&
-        data.amount is number && data.amount >= 100 && data.amount <= 10000000 &&
-        data.paymentType is string && data.paymentType in ['Reservation Deposit', 'Full Escrow Wire', 'Instant Card Checkout', 'Pre-Approved Financing'] &&
+        data.amount is number && data.amount >= 100 && data.amount <= 250000000 &&
+        data.paymentType is string && data.paymentType in [
+          'Token Booking (UPI/Card)',
+          'Full On-Road RTGS/NEFT Escrow',
+          'Instant Card / NetBanking',
+          'Pre-Approved Bank Auto Loan',
+          'Reservation Deposit',
+          'Full Escrow Wire',
+          'Instant Card Checkout',
+          'Pre-Approved Financing'
+        ] &&
         data.paymentLast4 is string && data.paymentLast4.size() == 4 && data.paymentLast4.matches('^[0-9]{4}$') &&
         data.shippingAddress is string && data.shippingAddress.size() >= 5 && data.shippingAddress.size() <= 250 &&
         data.status is string && data.status in ['processing', 'escrow_funded', 'completed', 'cancelled'] &&

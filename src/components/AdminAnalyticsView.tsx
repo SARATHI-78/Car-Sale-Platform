@@ -10,15 +10,22 @@ import {
   Eye,
   EyeOff,
   RotateCcw,
+  RefreshCw,
 } from 'lucide-react';
 import { db, OperationType, handleFirestoreError } from '../lib/firebase';
 import {
   CarListing,
   DirectMessage,
+  INDIAN_REGIONS,
+  IndianRegionCode,
   OrderStatus,
   OrderTransaction,
   UserProfile,
   UserRole,
+  calculateRegionalOnRoadPrice,
+  formatINR,
+  formatLakhs,
+  normalizeToINR,
   sanitizeId,
 } from '../types/marketplace';
 import { triggerBrowserPushNotification } from '../hooks/useOnlineStatus';
@@ -26,23 +33,27 @@ import { triggerBrowserPushNotification } from '../hooks/useOnlineStatus';
 interface AdminAnalyticsViewProps {
   currentUser: UserProfile;
   isAdminUser: boolean;
+  selectedRegion: IndianRegionCode;
   listings: CarListing[];
   orders: OrderTransaction[];
   messages: DirectMessage[];
   users: UserProfile[];
   onOpenCreateModal: () => void;
   onOpenEditModal: (listing: CarListing) => void;
+  onSyncIndianShowcase: () => void;
 }
 
 export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
   currentUser,
   isAdminUser,
+  selectedRegion,
   listings,
   orders,
   messages,
   users,
   onOpenCreateModal,
   onOpenEditModal,
+  onSyncIndianShowcase,
 }) => {
   const [activeTab, setActiveTab] = useState<'analytics' | 'inventory' | 'orders' | 'users'>(
     'analytics'
@@ -50,11 +61,18 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
   const [inventorySearch, setInventorySearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'reserved' | 'sold'>('all');
 
-  // Compute real-time analytics metrics
+  // Compute real-time analytics metrics in INR
   const metrics = useMemo(() => {
     const activeInventoryValue = listings
       .filter((l) => l.status === 'active')
-      .reduce((sum, l) => sum + l.price, 0);
+      .reduce((sum, l) => sum + normalizeToINR(l.price), 0);
+
+    const activeOnRoadValue = listings
+      .filter((l) => l.status === 'active')
+      .reduce(
+        (sum, l) => sum + calculateRegionalOnRoadPrice(l, selectedRegion).totalOnRoadPrice,
+        0
+      );
 
     const settledGmv = orders
       .filter((o) => o.status !== 'cancelled')
@@ -68,9 +86,9 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
       listings.length > 0 ? ((reservedOrSoldCount / listings.length) * 100).toFixed(1) : '0.0';
 
     // Breakdown by Body Style
-    const byBodyStyle = ['Coupe', 'Sedan', 'SUV', 'Wagon', 'Convertible'].map((style) => {
+    const byBodyStyle = ['SUV', 'MPV', 'Sedan', 'Hatchback', 'Coupe'].map((style) => {
       const styleListings = listings.filter((l) => l.bodyStyle === style);
-      const totalVal = styleListings.reduce((s, l) => s + l.price, 0);
+      const totalVal = styleListings.reduce((s, l) => s + normalizeToINR(l.price), 0);
       return {
         style,
         count: styleListings.length,
@@ -80,17 +98,20 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
     });
 
     // Breakdown by Powertrain
-    const byFuel = ['Gasoline', 'Electric', 'Hybrid'].map((fuel) => {
-      const fuelListings = listings.filter((l) => l.fuelType === fuel);
+    const byFuel = ['Diesel', 'Petrol', 'Hybrid', 'Electric', 'CNG'].map((fuel) => {
+      const fuelListings = listings.filter(
+        (l) => l.fuelType === fuel || (fuel === 'Petrol' && l.fuelType === 'Gasoline')
+      );
       return {
         fuel,
         count: fuelListings.length,
-        valuation: fuelListings.reduce((s, l) => s + l.price, 0),
+        valuation: fuelListings.reduce((s, l) => s + normalizeToINR(l.price), 0),
       };
     });
 
     return {
       activeInventoryValue,
+      activeOnRoadValue,
       settledGmv,
       totalViews,
       conversionRate,
@@ -98,7 +119,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
       byBodyStyle,
       byFuel,
     };
-  }, [listings, orders]);
+  }, [listings, orders, selectedRegion]);
 
   const filteredInventory = useMemo(() => {
     return listings.filter((item) => {
@@ -120,35 +141,40 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
     const headers = [
       'ID',
       'Title',
-      'VIN',
+      'RTO_VIN',
       'Year',
       'Make',
       'Model',
-      'Price_USD',
-      'Mileage',
+      'Ex_Showroom_INR',
+      'On_Road_Selected_City_INR',
+      'Kilometers',
       'Status',
       'Views',
-      'Location',
+      'Hub_Location',
     ];
-    const rows = listings.map((l) => [
-      l.id,
-      `"${l.title.replace(/"/g, '""')}"`,
-      l.vin,
-      l.year,
-      l.make,
-      l.model,
-      l.price,
-      l.mileage,
-      l.status,
-      l.viewsCount,
-      `"${l.location}"`,
-    ]);
+    const rows = listings.map((l) => {
+      const onRoad = calculateRegionalOnRoadPrice(l, selectedRegion);
+      return [
+        l.id,
+        `"${l.title.replace(/"/g, '""')}"`,
+        l.vin,
+        l.year,
+        l.make,
+        l.model,
+        onRoad.exShowroomPrice,
+        onRoad.totalOnRoadPrice,
+        l.mileage,
+        l.status,
+        l.viewsCount,
+        `"${l.location}"`,
+      ];
+    });
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `veloce_reserve_analytics_${Date.now()}.csv`);
+    link.setAttribute('download', `india_cars_onroad_analytics_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -208,10 +234,10 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
     }
 
     const notifId = sanitizeId(`ntf_ord_${Date.now()}_${currentUser.uid.slice(0, 5)}`);
-    const title = `Order #${order.id.slice(-6).toUpperCase()}: ${nextStatus
+    const title = `Booking #${order.id.slice(-6).toUpperCase()}: ${nextStatus
       .replace('_', ' ')
       .toUpperCase()}`;
-    const body = `Escrow status for ${order.listingTitle} updated to ${nextStatus.replace(
+    const body = `Escrow & Vahan RC status for ${order.listingTitle} updated to ${nextStatus.replace(
       '_',
       ' '
     )}.`;
@@ -257,6 +283,9 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
     }
   };
 
+  const activeRegionObj =
+    INDIAN_REGIONS.find((r) => r.code === selectedRegion) || INDIAN_REGIONS[0];
+
   return (
     <div className="max-w-[1360px] mx-auto px-4 sm:px-8 py-8 space-y-8">
       {/* Workspace Header */}
@@ -265,29 +294,37 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
           <div className="text-xs text-slate-500">
             <span>Workspace</span>
             <span className="mx-1.5">/</span>
-            <span>Executive Operations & Telemetry</span>
+            <span>Pan-India Hub Operations & Telemetry</span>
             <span className="mx-1.5">·</span>
             <span>Role: {isAdminUser ? 'Platform Administrator' : currentUser.role}</span>
           </div>
           <h1 className="text-2xl font-display font-bold text-slate-900 mt-1">
-            Sales Performance, Escrow Ledger & Inventory Console
+            Indian Hub Sales Performance, Vahan Escrow & Inventory Console
           </h1>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={onSyncIndianShowcase}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-amber-300 bg-amber-50 text-xs font-medium text-amber-900 hover:bg-amber-100 transition-colors whitespace-nowrap"
+            title="Seed or refresh the 5 flagship Indian cars (XUV700, Harrier, Creta, Grand Vitara, Hycross) into Firestore"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Sync Indian Hub Fleet
+          </button>
           <button
             onClick={handleExportCsv}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
-            Export CSV Report
+            Export INR CSV Report
           </button>
           <button
             onClick={onOpenCreateModal}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 transition-colors whitespace-nowrap"
           >
             <Plus className="w-3.5 h-3.5" />
-            Consign Vehicle
+            Sell / List Car
           </button>
         </div>
       </div>
@@ -295,61 +332,63 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
       {/* KPI Summary Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-5 rounded-xl bg-white border border-slate-200">
-          <div className="text-xs text-slate-500">Active Inventory Valuation</div>
+          <div className="text-xs text-slate-500">Active Hub Inventory (Ex-Showroom)</div>
           <div className="text-2xl font-mono tabular-nums font-semibold text-slate-900 mt-1.5">
-            ${metrics.activeInventoryValue.toLocaleString()}
+            {formatLakhs(metrics.activeInventoryValue)}
           </div>
           <div className="text-xs text-slate-500 mt-2">
-            <span>{listings.filter((l) => l.status === 'active').length} active lots</span>
+            <span>{formatINR(metrics.activeInventoryValue)}</span>
             <span className="mx-1.5">·</span>
-            <span className="text-emerald-700">Live sync</span>
+            <span className="text-emerald-700">
+              On-Road ({activeRegionObj.city}): {formatLakhs(metrics.activeOnRoadValue)}
+            </span>
           </div>
         </div>
 
         <div className="p-5 rounded-xl bg-white border border-slate-200">
-          <div className="text-xs text-slate-500">Escrow & Settled Volume</div>
+          <div className="text-xs text-slate-500">Escrow & Booking Volume (INR)</div>
           <div className="text-2xl font-mono tabular-nums font-semibold text-slate-900 mt-1.5">
-            ${metrics.settledGmv.toLocaleString()}
+            {formatINR(metrics.settledGmv)}
           </div>
           <div className="text-xs text-slate-500 mt-2">
-            <span>{orders.length} total escrow orders</span>
+            <span>{orders.length} total bookings</span>
             <span className="mx-1.5">·</span>
-            <span>100% verified</span>
+            <span>{formatLakhs(metrics.settledGmv)}</span>
           </div>
         </div>
 
         <div className="p-5 rounded-xl bg-white border border-slate-200">
-          <div className="text-xs text-slate-500">Listing Conversion Rate</div>
+          <div className="text-xs text-slate-500">Hub Conversion Rate</div>
           <div className="text-2xl font-mono tabular-nums font-semibold text-slate-900 mt-1.5">
             {metrics.conversionRate}%
           </div>
           <div className="text-xs text-slate-500 mt-2">
-            <span>{metrics.reservedOrSoldCount} reserved or sold</span>
+            <span>{metrics.reservedOrSoldCount} booked or sold</span>
             <span className="mx-1.5">·</span>
-            <span>Avg 11.4 days to contract</span>
+            <span>Avg 6.2 days to RC transfer</span>
           </div>
         </div>
 
         <div className="p-5 rounded-xl bg-white border border-slate-200">
-          <div className="text-xs text-slate-500">Buyer Engagement & Dossiers</div>
+          <div className="text-xs text-slate-500">Buyer Inspections & Inquiries</div>
           <div className="text-2xl font-mono tabular-nums font-semibold text-slate-900 mt-1.5">
-            {metrics.totalViews.toLocaleString()} views
+            {metrics.totalViews.toLocaleString('en-IN')} views
           </div>
           <div className="text-xs text-slate-500 mt-2">
-            <span>{messages.length} direct inquiries</span>
+            <span>{messages.length} test drive / hub chats</span>
             <span className="mx-1.5">·</span>
-            <span>{users.length} profiles</span>
+            <span>{users.length} accounts</span>
           </div>
         </div>
       </div>
 
       {/* Sub-navigation Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg w-fit">
+      <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg w-fit overflow-x-auto">
         {(
           [
-            { id: 'analytics', label: 'Analytics & Reporting' },
-            { id: 'inventory', label: `Listings Management (${listings.length})` },
-            { id: 'orders', label: `Escrow Orders (${orders.length})` },
+            { id: 'analytics', label: 'INR Analytics & Regional Tax' },
+            { id: 'inventory', label: `Hub Inventory (${listings.length})` },
+            { id: 'orders', label: `Bookings & Escrow (${orders.length})` },
             { id: 'users', label: `User Activity & RBAC (${users.length})` },
           ] as const
         ).map((tab) => (
@@ -375,29 +414,27 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-base font-semibold text-slate-900">
-                  Portfolio Valuation & Demand by Chassis Segment
+                  Pan-India Hub Valuation & Buyer Demand by Body Segment
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Real-time distribution of consigned inventory value and buyer catalog views
+                  Real-time distribution of Indian inventory value (₹ INR) and buyer views
                 </p>
               </div>
             </div>
 
             <div className="space-y-4">
               {metrics.byBodyStyle.map((row) => {
-                const maxVal = Math.max(
-                  1,
-                  ...metrics.byBodyStyle.map((b) => b.valuation)
-                );
+                const maxVal = Math.max(1, ...metrics.byBodyStyle.map((b) => b.valuation));
                 const widthPct = Math.max(4, Math.round((row.valuation / maxVal) * 100));
                 return (
                   <div key={row.style} className="space-y-1.5">
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-medium text-slate-800">
-                        {row.style} ({row.count} units)
+                        {row.style} ({row.count} cars)
                       </span>
                       <span className="font-mono tabular-nums text-slate-600">
-                        ${row.valuation.toLocaleString()} · {row.views.toLocaleString()} views
+                        {formatINR(row.valuation)} ({formatLakhs(row.valuation)}) ·{' '}
+                        {row.views.toLocaleString('en-IN')} views
                       </span>
                     </div>
                     <div className="h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -416,22 +453,22 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
           <div className="p-6 rounded-xl bg-white border border-slate-200 space-y-6">
             <div>
               <h2 className="text-base font-semibold text-slate-900">
-                Powertrain Allocation & Conversion Funnel
+                Indian Fuel Mix & Conversion Funnel
               </h2>
               <p className="text-xs text-slate-500">
-                Inventory split across internal combustion and electric platforms
+                Inventory allocation across Diesel, Petrol, Strong Hybrid, and EVs
               </p>
             </div>
 
             <div className="divide-y divide-slate-200 border-t border-b border-slate-200">
               {metrics.byFuel.map((f) => (
-                <div key={f.fuel} className="py-3 flex items-center justify-between text-xs">
+                <div key={f.fuel} className="py-2.5 flex items-center justify-between text-xs">
                   <div>
                     <div className="font-medium text-slate-900">{f.fuel}</div>
                     <div className="text-slate-500">{f.count} vehicles listed</div>
                   </div>
                   <div className="font-mono tabular-nums font-semibold text-slate-900">
-                    ${f.valuation.toLocaleString()}
+                    {formatLakhs(f.valuation)}
                   </div>
                 </div>
               ))}
@@ -442,19 +479,19 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                 Buyer Engagement Telemetry
               </div>
               <div className="flex justify-between text-xs text-slate-600">
-                <span>Catalog Dossier Inspections</span>
+                <span>140-Point Report Inspections</span>
                 <span className="font-mono tabular-nums font-medium text-slate-900">
-                  {metrics.totalViews.toLocaleString()}
+                  {metrics.totalViews.toLocaleString('en-IN')}
                 </span>
               </div>
               <div className="flex justify-between text-xs text-slate-600">
-                <span>Direct Concierge Messages</span>
+                <span>Home Test Drive / Advisor Chats</span>
                 <span className="font-mono tabular-nums font-medium text-slate-900">
                   {messages.length}
                 </span>
               </div>
               <div className="flex justify-between text-xs text-slate-600">
-                <span>Escrow Orders Executed</span>
+                <span>Token Bookings & On-Road Orders</span>
                 <span className="font-mono tabular-nums font-medium text-slate-900">
                   {orders.length}
                 </span>
@@ -472,7 +509,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
               type="text"
               value={inventorySearch}
               onChange={(e) => setInventorySearch(e.target.value)}
-              placeholder="Filter by make, model, VIN, seller, or location..."
+              placeholder="Filter by brand, model, RTO code, hub city, or seller..."
               className="w-full sm:w-80 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-slate-900"
             />
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
@@ -496,11 +533,13 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500">
-                  <th className="py-3 px-4">Vehicle & VIN</th>
-                  <th className="py-3 px-4">Seller</th>
-                  <th className="py-3 px-4 text-right">Price</th>
-                  <th className="py-3 px-4 text-right">Mileage</th>
-                  <th className="py-3 px-4 text-right">Views</th>
+                  <th className="py-3 px-4">Vehicle & RTO/VIN</th>
+                  <th className="py-3 px-4">Hub / Seller</th>
+                  <th className="py-3 px-4 text-right">Ex-Showroom (₹)</th>
+                  <th className="py-3 px-4 text-right">
+                    On-Road ({activeRegionObj.city})
+                  </th>
+                  <th className="py-3 px-4 text-right">Driven</th>
                   <th className="py-3 px-4">State</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -508,6 +547,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
               <tbody className="divide-y divide-slate-200 text-xs">
                 {filteredInventory.map((car) => {
                   const canManage = isAdminUser || car.sellerId === currentUser.uid;
+                  const onRoad = calculateRegionalOnRoadPrice(car, selectedRegion);
                   return (
                     <tr key={car.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4">
@@ -518,13 +558,13 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                       </td>
                       <td className="py-3 px-4 text-slate-700">{car.sellerName}</td>
                       <td className="py-3 px-4 text-right font-mono tabular-nums font-medium text-slate-900">
-                        ${car.price.toLocaleString()}
+                        {formatINR(onRoad.exShowroomPrice)}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold text-emerald-800">
+                        {formatINR(onRoad.totalOnRoadPrice)}
                       </td>
                       <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-600">
-                        {car.mileage.toLocaleString()} mi
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-600">
-                        {car.viewsCount}
+                        {car.mileage.toLocaleString('en-IN')} km
                       </td>
                       <td className="py-3 px-4">
                         <span
@@ -614,10 +654,10 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
         <div className="rounded-xl bg-white border border-slate-200 overflow-hidden">
           {orders.length === 0 ? (
             <div className="p-12 text-center">
-              <p className="text-sm font-medium text-slate-800">No Escrow Transactions Yet</p>
+              <p className="text-sm font-medium text-slate-800">No Bookings or Escrow Orders Yet</p>
               <p className="text-xs text-slate-500 mt-1">
-                When buyers reserve a vehicle or fund escrow checkout, real-time settlement records
-                appear here.
+                When buyers pay a ₹10,000 token or fund full on-road escrow, live records appear
+                here.
               </p>
             </div>
           ) : (
@@ -627,10 +667,10 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                   <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500">
                     <th className="py-3 px-4">Order ID & Vehicle</th>
                     <th className="py-3 px-4">Buyer</th>
-                    <th className="py-3 px-4">Settlement Method</th>
-                    <th className="py-3 px-4 text-right">Amount (USD)</th>
-                    <th className="py-3 px-4">Escrow Status</th>
-                    <th className="py-3 px-4 text-right">Advance Escrow Stage</th>
+                    <th className="py-3 px-4">Settlement Mode</th>
+                    <th className="py-3 px-4 text-right">Amount (₹ INR)</th>
+                    <th className="py-3 px-4">Vahan & Escrow Status</th>
+                    <th className="py-3 px-4 text-right">Advance Stage</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-xs">
@@ -650,7 +690,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                         {ord.paymentType} (•••• {ord.paymentLast4})
                       </td>
                       <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">
-                        ${ord.amount.toLocaleString()}
+                        {formatINR(ord.amount)}
                       </td>
                       <td className="py-3 px-4">
                         <span
@@ -675,13 +715,13 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                                 onClick={() => handleUpdateOrderStatus(ord, 'completed')}
                                 className="px-2.5 py-1 rounded bg-slate-900 text-white text-[11px] font-medium hover:bg-slate-800 transition-colors"
                               >
-                                Release & Complete
+                                Complete RC & Deliver
                               </button>
                               <button
                                 onClick={() => handleUpdateOrderStatus(ord, 'cancelled')}
                                 className="px-2.5 py-1 rounded border border-slate-200 text-slate-600 text-[11px] font-medium hover:bg-slate-100 transition-colors"
                               >
-                                Cancel
+                                Refund / Cancel
                               </button>
                             </>
                           )}
@@ -722,7 +762,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                     <td className="py-3 px-4">
                       {u.verifiedSeller ? (
                         <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Verified Dealer / Collector
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Assured Hub Partner
                         </span>
                       ) : (
                         <span className="text-slate-500">Standard Account</span>
@@ -748,7 +788,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({
                             onClick={() => handleToggleVerifiedSeller(u)}
                             className="px-2.5 py-1 rounded border border-amber-300 bg-amber-50 text-amber-800 text-[11px] font-medium hover:bg-amber-100 transition-colors"
                           >
-                            {u.verifiedSeller ? 'Revoke Badge' : 'Verify Seller'}
+                            {u.verifiedSeller ? 'Revoke Badge' : 'Verify Hub Seller'}
                           </button>
                         )}
                       </div>

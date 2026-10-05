@@ -1,18 +1,34 @@
 import React, { useState } from 'react';
 import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { ShieldCheck, Lock, CheckCircle2, X, CreditCard, Building2, Calculator } from 'lucide-react';
+import {
+  ShieldCheck,
+  Lock,
+  CheckCircle2,
+  X,
+  CreditCard,
+  Building2,
+  Calculator,
+  MapPin,
+} from 'lucide-react';
 import { db, OperationType, handleFirestoreError } from '../lib/firebase';
 import {
   CarListing,
+  INDIAN_REGIONS,
+  IndianRegionCode,
   PaymentMethodType,
   UserProfile,
   VALIDATION_RULES,
+  calculateRegionalOnRoadPrice,
+  formatINR,
+  formatLakhs,
   sanitizeId,
 } from '../types/marketplace';
 import { triggerBrowserPushNotification } from '../hooks/useOnlineStatus';
 
 interface CheckoutModalProps {
   listing: CarListing;
+  selectedRegion: IndianRegionCode;
+  onSelectRegion: (code: IndianRegionCode) => void;
   currentUser: UserProfile;
   isOnline: boolean;
   onClose: () => void;
@@ -21,18 +37,23 @@ interface CheckoutModalProps {
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   listing,
+  selectedRegion,
+  onSelectRegion,
   currentUser,
   isOnline,
   onClose,
   onSuccess,
 }) => {
-  const [paymentType, setPaymentType] = useState<PaymentMethodType>('Reservation Deposit');
-  const [cardNumber, setCardNumber] = useState('4532 •••• •••• 8842');
+  const [paymentType, setPaymentType] = useState<PaymentMethodType>(
+    'Token Booking (UPI/Card)'
+  );
+  const [upiOrCardInput, setUpiOrCardInput] = useState('9840128842@okhdfcbank');
   const [expiry, setExpiry] = useState('08/29');
   const [cvc, setCvc] = useState('842');
-  const [wireRoutingLast4, setWireRoutingLast4] = useState('9041');
+  const [rtgsAccountLast4, setRtgsAccountLast4] = useState('9041');
+  const [selectedBank, setSelectedBank] = useState('HDFC Bank Xpress Car Loan');
   const [shippingAddress, setShippingAddress] = useState(
-    '742 Evergreen Terrace, Beverly Hills, CA 90210'
+    'Flat 402, Prestige Shantiniketan, Whitefield, Bengaluru - 560048'
   );
   const [financeTermMonths, setFinanceTermMonths] = useState<number>(60);
   const [downPaymentPct, setDownPaymentPct] = useState<number>(20);
@@ -44,32 +65,33 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     paymentType: PaymentMethodType;
     paymentLast4: string;
     shippingAddress: string;
+    rtoCity: string;
   } | null>(null);
 
-  const depositAmount = 2500;
-  const escrowFee = 495;
-  const apr = 5.49;
+  const onRoad = calculateRegionalOnRoadPrice(listing, selectedRegion);
+  const tokenBookingAmount = 10000; // ₹10,000 refundable booking token
+  const apr = 8.85; // 8.85% p.a. Indian Auto Loan interest rate
 
-  const downPaymentDollar = Math.round((listing.price * downPaymentPct) / 100);
-  const financedPrincipal = listing.price - downPaymentDollar;
+  const downPaymentINR = Math.round((onRoad.totalOnRoadPrice * downPaymentPct) / 100);
+  const financedPrincipal = onRoad.totalOnRoadPrice - downPaymentINR;
   const monthlyRate = apr / 100 / 12;
-  const monthlyPayment = Math.round(
+  const monthlyEmi = Math.round(
     (financedPrincipal * (monthlyRate * Math.pow(1 + monthlyRate, financeTermMonths))) /
       (Math.pow(1 + monthlyRate, financeTermMonths) - 1)
   );
 
   const transactionAmount =
-    paymentType === 'Reservation Deposit'
-      ? depositAmount
-      : paymentType === 'Pre-Approved Financing'
-      ? Math.max(1000, downPaymentDollar)
-      : listing.price + escrowFee;
+    paymentType === 'Token Booking (UPI/Card)'
+      ? tokenBookingAmount
+      : paymentType === 'Pre-Approved Bank Auto Loan'
+      ? Math.max(10000, downPaymentINR)
+      : onRoad.totalOnRoadPrice;
 
   const getCleanLast4 = (): string => {
     const rawDigits =
-      paymentType === 'Full Escrow Wire'
-        ? wireRoutingLast4.replace(/\D/g, '')
-        : cardNumber.replace(/\D/g, '');
+      paymentType === 'Full On-Road RTGS/NEFT Escrow'
+        ? rtgsAccountLast4.replace(/\D/g, '')
+        : upiOrCardInput.replace(/\D/g, '');
     const padded = (rawDigits + '8842').slice(-4);
     return VALIDATION_RULES.LAST4_PATTERN.test(padded) ? padded : '8842';
   };
@@ -78,12 +100,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     e.preventDefault();
     setErrorMsg(null);
 
-    const trimmedAddress = shippingAddress.trim();
-    if (
-      trimmedAddress.length < VALIDATION_RULES.SHIPPING_ADDRESS_MIN ||
-      trimmedAddress.length > VALIDATION_RULES.SHIPPING_ADDRESS_MAX
-    ) {
-      setErrorMsg('Please enter a valid delivery address (5 to 250 characters).');
+    const trimmedAddress = `${shippingAddress.trim()} [RTO: ${onRoad.region.city} ${
+      onRoad.region.rtoPrefix
+    }]`.slice(0, VALIDATION_RULES.SHIPPING_ADDRESS_MAX);
+
+    if (trimmedAddress.length < VALIDATION_RULES.SHIPPING_ADDRESS_MIN) {
+      setErrorMsg('Please enter a valid home delivery address or hub pickup location.');
       return;
     }
 
@@ -91,9 +113,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setSubmitting(true);
 
     const orderId = sanitizeId(`ord_${Date.now()}_${currentUser.uid.slice(0, 6)}`);
-    const nextListingStatus = paymentType === 'Reservation Deposit' ? 'reserved' : 'sold';
+    const nextListingStatus =
+      paymentType === 'Token Booking (UPI/Card)' ? 'reserved' : 'sold';
     const initialOrderStatus =
-      paymentType === 'Full Escrow Wire' ? 'processing' : 'escrow_funded';
+      paymentType === 'Full On-Road RTGS/NEFT Escrow' ? 'processing' : 'escrow_funded';
 
     try {
       await setDoc(doc(db, 'orders', orderId), {
@@ -129,10 +152,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     const notifId = sanitizeId(`ntf_${Date.now()}_${currentUser.uid.slice(0, 6)}`);
     const notifTitle =
-      paymentType === 'Reservation Deposit'
-        ? 'Vehicle Reserved in Escrow'
-        : 'Vehicle Purchase Escrow Funded';
-    const notifBody = `${listing.title} — $${transactionAmount.toLocaleString()} (${paymentType}) confirmed.`;
+      paymentType === 'Token Booking (UPI/Card)'
+        ? `Car Reserved in ${onRoad.region.city}`
+        : `On-Road Purchase Funded (${onRoad.region.rtoPrefix})`;
+    const notifBody = `${listing.title} — ${formatINR(transactionAmount)} (${paymentType}) confirmed.`;
 
     try {
       await setDoc(doc(db, 'notifications', notifId), {
@@ -159,6 +182,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       paymentType,
       paymentLast4: last4,
       shippingAddress: trimmedAddress,
+      rtoCity: `${onRoad.region.city} (${onRoad.region.rtoPrefix})`,
     });
     onSuccess(orderId);
   };
@@ -172,10 +196,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
             <div>
               <h2 className="text-base font-semibold tracking-wide">
-                Veloce Escrow & Checkout Settlement
+                BharatDrive / Veloce India On-Road Escrow & Booking
               </h2>
               <p className="text-xs text-slate-400">
-                256-bit encrypted transaction vault · Funds held until inspection approval
+                7-Day Easy Return · Automated Vahan RC Transfer · Zero Hidden Charges
               </p>
             </div>
           </div>
@@ -194,38 +218,39 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
               <div>
                 <h3 className="text-base font-semibold text-emerald-950">
-                  Order #{confirmedOrder.orderId.slice(-8).toUpperCase()} Confirmed —{' '}
-                  {isOnline ? 'Escrow Ledger Recorded' : 'Queued in Offline Vault (Auto-Sync Active)'}
+                  Booking #{confirmedOrder.orderId.slice(-8).toUpperCase()} Confirmed —{' '}
+                  {isOnline
+                    ? 'Vahan RC & Escrow Ledger Recorded'
+                    : 'Queued in Offline Vault (Auto-Sync Active)'}
                 </h3>
                 <p className="text-xs text-emerald-800 mt-1">
-                  Your transaction for <strong>{listing.title}</strong> is protected under Veloce
-                  Buyer Protection. Enclosed carrier dispatch and 7-day mechanical inspection window
-                  are now active.
+                  Your booking for <strong>{listing.title}</strong> is protected by our 7-Day
+                  Money-Back Guarantee and 12-Month Comprehensive Warranty.
                 </p>
               </div>
             </div>
 
             <div className="border border-slate-200 rounded-lg divide-y divide-slate-200 text-sm">
               <div className="flex justify-between px-4 py-3">
-                <span className="text-slate-500">Vehicle Identification (VIN)</span>
+                <span className="text-slate-500">RTO Registration / VIN</span>
                 <span className="font-mono tabular-nums font-medium text-slate-900">
-                  {listing.vin}
+                  {listing.vin} · {confirmedOrder.rtoCity}
                 </span>
               </div>
               <div className="flex justify-between px-4 py-3">
-                <span className="text-slate-500">Settlement Method</span>
+                <span className="text-slate-500">Payment Mode</span>
                 <span className="font-medium text-slate-900">
-                  {confirmedOrder.paymentType} (•••• {confirmedOrder.paymentLast4})
+                  {confirmedOrder.paymentType} (Ref •••• {confirmedOrder.paymentLast4})
                 </span>
               </div>
               <div className="flex justify-between px-4 py-3">
-                <span className="text-slate-500">Amount Settled / Held in Escrow</span>
+                <span className="text-slate-500">Amount Paid / Locked in Escrow</span>
                 <span className="font-mono tabular-nums font-semibold text-slate-900">
-                  ${confirmedOrder.amount.toLocaleString()} USD
+                  {formatINR(confirmedOrder.amount)} ({formatLakhs(confirmedOrder.amount)})
                 </span>
               </div>
               <div className="flex justify-between px-4 py-3">
-                <span className="text-slate-500">Delivery Destination</span>
+                <span className="text-slate-500">Delivery / Hub Address</span>
                 <span className="text-slate-900 text-right max-w-xs">
                   {confirmedOrder.shippingAddress}
                 </span>
@@ -237,63 +262,95 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 onClick={onClose}
                 className="px-5 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 transition-colors"
               >
-                Return to Marketplace
+                Return to Car Showroom
               </button>
             </div>
           </div>
         ) : (
-          <form onSubmit={handleProcessPayment} className="p-6 space-y-6">
-            {/* Vehicle Summary Bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-200">
+          <form onSubmit={handleProcessPayment} className="p-6 space-y-5">
+            {/* Vehicle & Regional On-Road Summary Bar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
               <div>
                 <div className="text-xs text-slate-500">
                   <span>{listing.year}</span>
                   <span className="mx-1.5">·</span>
                   <span>{listing.make}</span>
                   <span className="mx-1.5">·</span>
+                  <span>{listing.fuelType}</span>
+                  <span className="mx-1.5">·</span>
                   <span className="font-mono">{listing.vin}</span>
                 </div>
                 <h3 className="text-lg font-semibold text-slate-900 mt-0.5">{listing.title}</h3>
               </div>
               <div className="sm:text-right">
-                <div className="text-xs text-slate-500">Vehicle Asking Price</div>
-                <div className="text-xl font-mono tabular-nums font-semibold text-slate-900">
-                  ${listing.price.toLocaleString()}
+                <div className="text-xs text-slate-500">
+                  On-Road Price in {onRoad.region.city}
+                </div>
+                <div className="text-xl font-mono tabular-nums font-bold text-slate-900">
+                  {formatINR(onRoad.totalOnRoadPrice)}
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  Ex-Hub: {formatINR(onRoad.exShowroomPrice)} + RTO Tax:{' '}
+                  {formatINR(onRoad.rtoRoadTax)}
                 </div>
               </div>
+            </div>
+
+            {/* Region Selector inside Checkout */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-lg bg-amber-50/70 border border-amber-200 text-xs">
+              <div className="flex items-center gap-2 text-amber-950 font-medium">
+                <MapPin className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>
+                  RTO Region: <strong>{onRoad.region.city}</strong> ({onRoad.region.state} Road Tax{' '}
+                  {onRoad.roadTaxPctApplied}%)
+                </span>
+              </div>
+              <select
+                value={selectedRegion}
+                onChange={(e) => onSelectRegion(e.target.value as IndianRegionCode)}
+                className="rounded border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900"
+              >
+                {INDIAN_REGIONS.map((r) => (
+                  <option key={r.code} value={r.code}>
+                    {r.city} ({r.rtoPrefix})
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* Payment Method Selector */}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-2">
-                Select Settlement Structure
+                Select Booking or Full On-Road Settlement Mode
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {(
                   [
                     {
-                      id: 'Reservation Deposit',
-                      label: 'Refundable Escrow Hold',
-                      sub: '$2,500 instant deposit · Locks vehicle 72h',
+                      id: 'Token Booking (UPI/Card)',
+                      label: 'Refundable Token Booking',
+                      sub: '₹10,000 via UPI/Card · Locks car 72h for Test Drive',
                       icon: Lock,
                     },
                     {
-                      id: 'Instant Card Checkout',
-                      label: 'Instant Card Settlement',
-                      sub: 'Full purchase + $495 escrow protection',
-                      icon: CreditCard,
+                      id: 'Pre-Approved Bank Auto Loan',
+                      label: 'Instant Bank Auto Loan EMI',
+                      sub: `8.85% p.a. · Pay ${downPaymentPct}% down (${formatLakhs(
+                        downPaymentINR
+                      )})`,
+                      icon: Calculator,
                     },
                     {
-                      id: 'Full Escrow Wire',
-                      label: 'FedWire / SWIFT Escrow',
-                      sub: 'Direct institutional bank settlement',
+                      id: 'Full On-Road RTGS/NEFT Escrow',
+                      label: 'Full On-Road RTGS / NEFT',
+                      sub: `Pay ${formatLakhs(onRoad.totalOnRoadPrice)} · Free RC Transfer`,
                       icon: Building2,
                     },
                     {
-                      id: 'Pre-Approved Financing',
-                      label: 'Veloce Private Client Finance',
-                      sub: `5.49% APR · Pay ${downPaymentPct}% down today`,
-                      icon: Calculator,
+                      id: 'Instant Card / NetBanking',
+                      label: 'Debit / Credit Card / NetBanking',
+                      sub: 'Instant full on-road settlement',
+                      icon: CreditCard,
                     },
                   ] as const
                 ).map((option) => {
@@ -321,21 +378,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               </div>
             </div>
 
-            {/* Financing Calculator if Financing selected */}
-            {paymentType === 'Pre-Approved Financing' && (
+            {/* Indian Bank Auto Loan EMI Calculator */}
+            {paymentType === 'Pre-Approved Bank Auto Loan' && (
               <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-800">
-                    Financing Structure (5.49% Fixed APR)
+                    Auto Loan Calculator (8.85% p.a. Fixed ROI)
                   </span>
-                  <span className="text-sm font-mono tabular-nums font-semibold text-slate-900">
-                    Est. ${monthlyPayment.toLocaleString()}/mo for {financeTermMonths} mos
+                  <span className="text-sm font-mono tabular-nums font-bold text-slate-900">
+                    EMI: {formatINR(monthlyEmi)}/mo for {financeTermMonths} months
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs text-slate-600 mb-1">
-                      Down Payment ({downPaymentPct}% — ${downPaymentDollar.toLocaleString()})
+                      Down Payment ({downPaymentPct}% — {formatINR(downPaymentINR)})
                     </label>
                     <input
                       type="range"
@@ -348,9 +405,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-600 mb-1">Loan Term (Months)</label>
+                    <label className="block text-xs text-slate-600 mb-1">
+                      Loan Tenure (Months)
+                    </label>
                     <div className="flex gap-1.5">
-                      {[36, 48, 60, 72].map((term) => (
+                      {[36, 48, 60, 72, 84].map((term) => (
                         <button
                           type="button"
                           key={term}
@@ -371,29 +430,34 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             )}
 
             {/* Payment Instrument Inputs */}
-            {paymentType === 'Full Escrow Wire' ? (
+            {paymentType === 'Full On-Road RTGS/NEFT Escrow' ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Originating Bank Name
+                    Remitting Indian Bank Name
                   </label>
-                  <input
-                    type="text"
-                    required
-                    defaultValue="JPMorgan Private Bank"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-slate-900"
-                  />
+                  <select
+                    value={selectedBank}
+                    onChange={(e) => setSelectedBank(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 bg-white"
+                  >
+                    <option>HDFC Bank RTGS / NEFT</option>
+                    <option>State Bank of India (SBI)</option>
+                    <option>ICICI Bank Corporate / Retail</option>
+                    <option>Axis Bank Burgundy</option>
+                    <option>Kotak Mahindra Bank</option>
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Originating Account Last 4 Digits
+                    Remitting Account / UTR Last 4 Digits
                   </label>
                   <input
                     type="text"
                     required
                     maxLength={4}
-                    value={wireRoutingLast4}
-                    onChange={(e) => setWireRoutingLast4(e.target.value.replace(/\D/g, ''))}
+                    value={rtgsAccountLast4}
+                    onChange={(e) => setRtgsAccountLast4(e.target.value.replace(/\D/g, ''))}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono tabular-nums text-slate-900 focus:outline-none focus:border-slate-900"
                   />
                 </div>
@@ -402,14 +466,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Card Number
+                    UPI VPA ID or RuPay / Visa / Mastercard Number
                   </label>
                   <input
                     type="text"
                     required
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(e.target.value)}
-                    placeholder="4532 •••• •••• 8842"
+                    value={upiOrCardInput}
+                    onChange={(e) => setUpiOrCardInput(e.target.value)}
+                    placeholder="9840128842@okhdfcbank or 4532 •••• 8842"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono tabular-nums text-slate-900 focus:outline-none focus:border-slate-900"
                   />
                 </div>
@@ -426,7 +490,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">CVC</label>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">CVV/PIN</label>
                     <input
                       type="text"
                       required
@@ -441,10 +505,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               </div>
             )}
 
-            {/* Enclosed Carrier Delivery Address */}
+            {/* Home Delivery or Hub Pickup Address */}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                Enclosed Carrier Delivery Address or Receiving Concierge Hub
+                Doorstep Delivery Address or Nearest Hub ({onRoad.region.hubName})
               </label>
               <input
                 type="text"
@@ -464,9 +528,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             {/* Total & Submit */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-200">
               <div>
-                <div className="text-xs text-slate-500">Total Due Today (Escrow Protected)</div>
-                <div className="text-2xl font-mono tabular-nums font-semibold text-slate-900">
-                  ${transactionAmount.toLocaleString()} USD
+                <div className="text-xs text-slate-500">
+                  Payable Today ({paymentType})
+                </div>
+                <div className="text-2xl font-mono tabular-nums font-bold text-slate-900">
+                  {formatINR(transactionAmount)}{' '}
+                  <span className="text-xs font-normal text-slate-500">
+                    ({formatLakhs(transactionAmount)})
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -480,11 +549,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-6 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap"
+                  className="px-6 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap"
                 >
                   {submitting
-                    ? 'Authorizing Escrow...'
-                    : `Authorize $${transactionAmount.toLocaleString()} Settlement`}
+                    ? 'Processing Payment...'
+                    : `Pay ${formatINR(transactionAmount)} & Confirm`}
                 </button>
               </div>
             </div>
